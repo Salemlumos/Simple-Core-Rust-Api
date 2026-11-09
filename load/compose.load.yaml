@@ -1,0 +1,26 @@
+# Override para os testes de carga (usado por load/run.sh):
+# - API e PostgreSQL em núcleos físicos separados (SMT: 0-1, 2-3, ...);
+#   o k6 roda em 8-15.
+# - /metrics publicado só em 127.0.0.1 para coletar taxa de acerto dos caches.
+# - Limites de login altos: o cenário de login mede o custo do Argon2id, não o
+#   rate limit (que continua ativo com os valores padrão fora da carga).
+services:
+  api:
+    cpuset: "0-3"
+    cpus: 4
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:${METRICS_PUBLISH_PORT:-9090}:9090"
+    environment:
+      MAX_OPEN_TENANT_POOLS: ${MAX_OPEN_TENANT_POOLS:-25}
+      TENANT_POOL_MAX_CONNECTIONS: ${TENANT_POOL_MAX_CONNECTIONS:-10}
+      LOGIN_RATE_TENANT_PER_IP: 100000000
+      LOGIN_RATE_TENANT_PER_EMAIL: 100000000
+      LOGIN_RATE_PLATFORM_PER_IP: 100000
+      LOGIN_RATE_PLATFORM_PER_EMAIL: 100000
+      RUST_LOG: warn
+  postgres:
+    cpuset: "4-7"
+    cpus: 4
+  worker:
+    cpuset: "0-3"

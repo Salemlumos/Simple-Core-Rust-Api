@@ -1,0 +1,180 @@
+# Requer Docker Compose >= 2.20 (depends_on.required).
+#
+#   perfil db  : postgres do projeto
+#   perfil app : bootstrap -> migrate -> seed -> api + worker
+#
+# Cada serviço recebe somente as credenciais de que precisa.
+
+name: simple-core
+
+x-db-common: &db-common
+  DB_HOST: ${DB_HOST:?DB_HOST is required}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_CONTROL_NAME: ${DB_CONTROL_NAME:-control}
+  DB_SSLMODE: ${DB_SSLMODE:-prefer}
+  DB_SSL_ROOT_CERT: ${DB_SSL_ROOT_CERT:-}
+  DB_CONNECT_RETRY_SECONDS: ${DB_CONNECT_RETRY_SECONDS:-60}
+  DB_RUNTIME_USER: ${DB_RUNTIME_USER:-app_runtime}
+  DB_MIGRATOR_USER: ${DB_MIGRATOR_USER:-app_migrator}
+  RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+
+x-app: &app
+  image: simple-core:${IMAGE_TAG:-local}
+  profiles: [app]
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    # Certificado CA do banco externo (somente leitura). WORKDIR é /app, então
+    # DB_SSL_ROOT_CERT=certs/ca.crt vale no container e na máquina local.
+    - ${DB_CA_DIR:-./certs}:/app/certs:ro
+
+x-after-postgres: &after-postgres
+  postgres:
+    condition: service_healthy
+    required: false
+
+services:
+  postgres:
+    profiles: [db]
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${DB_ADMIN_USER?DB_ADMIN_USER must be defined in the env file}
+      # `?` (e não `:?`): o Compose interpola este serviço mesmo sem o perfil db,
+      # e no modo externo a senha admin fica vazia. A imagem recusa senha vazia,
+      # então nunca há senha padrão.
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD?DB_ADMIN_PASSWORD must be defined in the env file}
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    command:
+      - postgres
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-300}
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-1GB}
+      - -c
+      - fsync=on
+      - -c
+      - synchronous_commit=on
+    ports:
+      - "127.0.0.1:${DB_PUBLISH_PORT:-5433}:5432"
+    # A partir do PostgreSQL 18 a imagem guarda os dados em
+    # /var/lib/postgresql/18/docker; o volume monta o diretório pai.
+    volumes:
+      - pgdata:/var/lib/postgresql
+    shm_size: 1g
+    cpus: ${POSTGRES_CPUS:-4}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  bootstrap:
+    <<: *app
+    build:
+      context: .
+      args:
+        CARGO_FEATURES: ${CARGO_FEATURES:-}
+    command: ["bootstrap"]
+    environment:
+      <<: *db-common
+      DB_BOOTSTRAP: ${DB_BOOTSTRAP:-true}
+      DB_ADMIN_DATABASE: ${DB_ADMIN_DATABASE:-postgres}
+      # Opcionais quando DB_BOOTSTRAP=false (bancos gerenciados).
+      DB_ADMIN_USER: ${DB_ADMIN_USER:-}
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD:-}
+      DB_MIGRATOR_PASSWORD: ${DB_MIGRATOR_PASSWORD:?DB_MIGRATOR_PASSWORD is required}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD:?DB_RUNTIME_PASSWORD is required}
+    depends_on:
+      <<: *after-postgres
+    restart: "no"
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    environment:
+      <<: *db-common
+      DB_MIGRATOR_PASSWORD: ${DB_MIGRATOR_PASSWORD:?DB_MIGRATOR_PASSWORD is required}
+      MIGRATE_CONCURRENCY: ${MIGRATE_CONCURRENCY:-4}
+    depends_on:
+      <<: *after-postgres
+      bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+
+  seed:
+    <<: *app
+    command: ["seed"]
+    environment:
+      <<: *db-common
+      DB_MIGRATOR_PASSWORD: ${DB_MIGRATOR_PASSWORD:?DB_MIGRATOR_PASSWORD is required}
+      SEED_OWNER_EMAIL: ${SEED_OWNER_EMAIL:?SEED_OWNER_EMAIL is required}
+      SEED_OWNER_NAME: ${SEED_OWNER_NAME:?SEED_OWNER_NAME is required}
+      SEED_OWNER_PASSWORD: ${SEED_OWNER_PASSWORD:?SEED_OWNER_PASSWORD is required}
+      SEED_TENANT_SLUG: ${SEED_TENANT_SLUG:?SEED_TENANT_SLUG is required}
+      SEED_TENANT_NAME: ${SEED_TENANT_NAME:?SEED_TENANT_NAME is required}
+    depends_on:
+      <<: *after-postgres
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    <<: *app
+    command: ["serve"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    cpus: ${API_CPUS:-4}
+    mem_limit: ${API_MEMORY:-1g}
+    environment:
+      <<: *db-common
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD:?DB_RUNTIME_PASSWORD is required}
+      API_BIND: 0.0.0.0:8080
+      METRICS_BIND: 0.0.0.0:9090
+      JWT_ISSUER: ${JWT_ISSUER:-simple-core}
+      JWT_PLATFORM_SECRET: ${JWT_PLATFORM_SECRET:?JWT_PLATFORM_SECRET is required}
+      JWT_TENANT_SECRET: ${JWT_TENANT_SECRET:?JWT_TENANT_SECRET is required}
+      API_INSTANCES: ${API_INSTANCES:-1}
+      CONTROL_POOL_MAX_CONNECTIONS: ${CONTROL_POOL_MAX_CONNECTIONS:-10}
+      TENANT_POOL_MAX_CONNECTIONS: ${TENANT_POOL_MAX_CONNECTIONS:-10}
+      MAX_OPEN_TENANT_POOLS: ${MAX_OPEN_TENANT_POOLS:-25}
+      PG_CONNECTION_RESERVE: ${PG_CONNECTION_RESERVE:-20}
+      ACCESS_CACHE_CAPACITY: ${ACCESS_CACHE_CAPACITY:-200000}
+      LOGIN_RATE_TENANT_PER_IP: ${LOGIN_RATE_TENANT_PER_IP:-60}
+      LOGIN_RATE_TENANT_PER_EMAIL: ${LOGIN_RATE_TENANT_PER_EMAIL:-10}
+      LOGIN_RATE_PLATFORM_PER_IP: ${LOGIN_RATE_PLATFORM_PER_IP:-20}
+      LOGIN_RATE_PLATFORM_PER_EMAIL: ${LOGIN_RATE_PLATFORM_PER_EMAIL:-5}
+    ports:
+      - "${API_PUBLISH_ADDR:-127.0.0.1}:${API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "/app/api", "healthcheck"]
+      interval: 5s
+      timeout: 4s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      <<: *after-postgres
+      seed:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cpus: ${WORKER_CPUS:-1}
+    mem_limit: ${WORKER_MEMORY:-256m}
+    environment:
+      <<: *db-common
+      DB_MIGRATOR_PASSWORD: ${DB_MIGRATOR_PASSWORD:?DB_MIGRATOR_PASSWORD is required}
+      WORKER_METRICS_BIND: 0.0.0.0:9091
+    depends_on:
+      <<: *after-postgres
+      seed:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

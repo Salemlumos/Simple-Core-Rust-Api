@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT f.code AS feature, o.effect, o.reason, o.expires_at, o.created_by, o.created_by_type, o.created_at\n           FROM user_feature_overrides o JOIN features f ON f.id = o.feature_id\n           WHERE o.user_id = $1 ORDER BY f.code",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "feature",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "features",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "effect",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "effect"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_by_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "created_by_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5a08be48c98214c4b2816798f5623b7289f018186520a8c879c4bc90342e8d2b"
+}

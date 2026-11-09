@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET is_tenant_admin = $2, updated_at = now() WHERE id = $1 AND is_tenant_admin <> $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c627edb75ba5056fd1c0379c1e8c3205c269e56d62ed4b86d54fb57497d585bb"
+}

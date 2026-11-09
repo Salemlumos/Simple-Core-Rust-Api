@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM users WHERE is_tenant_admin AND is_active) AS \"any!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "any!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f9517d8a590188bcce0083754dcd47dc1727a1678364e21b44ecbf6500668b1e"
+}

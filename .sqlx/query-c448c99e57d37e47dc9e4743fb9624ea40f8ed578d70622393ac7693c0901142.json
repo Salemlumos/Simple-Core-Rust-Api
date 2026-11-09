@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.code, m.name,\n             COALESCE((SELECT jsonb_agg(jsonb_build_object('code', f.code, 'name', f.name) ORDER BY f.code)\n                       FROM features f WHERE f.module_id = m.id), '[]'::jsonb) AS \"features!\"\n           FROM modules m ORDER BY m.code",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modules",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modules",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "features!",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "c448c99e57d37e47dc9e4743fb9624ea40f8ed578d70622393ac7693c0901142"
+}

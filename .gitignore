@@ -1,0 +1,12 @@
+/target
+.env
+.env.docker
+.env.local
+.env.external
+.env.external2
+/certs/*
+!/certs/.gitkeep
+/load/results/*
+!/load/results/.gitkeep
+/load/data/*
+!/load/data/.gitkeep

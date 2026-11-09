@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM users WHERE id = $1 AND (NOT is_tenant_admin OR $2)\n           RETURNING (is_tenant_admin AND is_active) AS \"was_active_admin!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "was_active_admin!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "338659f8bc2c2ac3cbc7dd6c0bf8bbb2044f2590f07fd72ea130e7315c1fb69b"
+}

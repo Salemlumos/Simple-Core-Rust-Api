@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM platform_users WHERE id = $1 AND role = 'superuser'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de9934304b60e994549a511c02f11eff851b8e14357c01acbbebd3eba217f25f"
+}

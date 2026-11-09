@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM user_profiles WHERE user_id = $1 RETURNING profile_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "profile_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "user_profiles",
+            "name": "profile_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c646ef9850945d7155728a8f95c824afc09fc3494df3d7ca94a5c45d8815b515"
+}

@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH up AS (\n             INSERT INTO user_feature_overrides\n               (user_id, feature_id, effect, reason, expires_at, created_by, created_by_type)\n             SELECT $1, f.id, $3, $4, $5, $6, $7 FROM features f WHERE f.code = $2\n             ON CONFLICT (user_id, feature_id) DO UPDATE SET\n               effect = EXCLUDED.effect, reason = EXCLUDED.reason, expires_at = EXCLUDED.expires_at,\n               created_by = EXCLUDED.created_by, created_by_type = EXCLUDED.created_by_type,\n               created_at = now()\n             RETURNING effect, reason, expires_at, created_by, created_by_type, created_at\n           )\n           SELECT $2::text AS \"feature!\", effect AS \"effect!\", reason AS \"reason!\", expires_at,\n                  created_by AS \"created_by!\", created_by_type AS \"created_by_type!\", created_at AS \"created_at!\"\n           FROM up",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "feature!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "effect!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "effect"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "reason!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_by!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_by_type!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "created_by_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "user_feature_overrides",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1dfb9a10919f0903ac6964a02971aad1671fe4593a0c2a4a81f6b0f441437adb"
+}

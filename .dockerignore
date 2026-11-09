@@ -1,0 +1,8 @@
+target
+.git
+.env*
+!.env.*.example
+load
+tests
+certs
+*.md

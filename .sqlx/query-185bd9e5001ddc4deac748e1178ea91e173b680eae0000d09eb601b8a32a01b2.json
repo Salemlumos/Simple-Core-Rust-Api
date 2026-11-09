@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE refresh_tokens rt SET revoked_at = now()\n         FROM users u\n         WHERE rt.token_hash = $1 AND rt.revoked_at IS NULL AND rt.expires_at > now()\n           AND u.id = rt.user_id AND u.is_active\n         RETURNING rt.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "185bd9e5001ddc4deac748e1178ea91e173b680eae0000d09eb601b8a32a01b2"
+}

@@ -1,0 +1,62 @@
+[package]
+name = "simple-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[[bin]]
+name = "api"
+path = "src/main.rs"
+
+[lib]
+name = "simple_core"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Alocador alternativo. Mantido atrás de feature: só é usado se a medição mostrar ganho (ver README).
+mimalloc = ["dep:mimalloc"]
+
+[dependencies]
+anyhow = "1.0.104"
+argon2 = "0.6.0"
+axum = { version = "0.8.9", features = ["macros"] }
+base64 = "0.23.1"
+futures = "0.3.34"
+hmac = "0.13.0"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
+log = "0.4.35"
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+mimalloc = { version = "0.1.52", optional = true }
+moka = { version = "0.12.16", features = ["future"] }
+pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "uuid", "time", "json", "tls-rustls-ring-webpki"] }
+thiserror = "2.0.21"
+time = { version = "0.3.55", features = ["serde", "formatting", "parsing"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util"] }
+tower = { version = "0.5.3", features = ["timeout", "util", "limit"] }
+tower-http = { version = "0.7.1", features = ["limit", "catch-panic"] }
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
+uuid = { version = "1.29.2", features = ["v7", "serde"] }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "unwind"
+
+# Argon2id/SHA-256 em debug são muito lentos; otimiza só as dependências nos testes.
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM profile_features WHERE profile_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9e0bd84cca39b0528e7e1a3451867a022f727ef34ca388f845a9771ea714b2ec"
+}

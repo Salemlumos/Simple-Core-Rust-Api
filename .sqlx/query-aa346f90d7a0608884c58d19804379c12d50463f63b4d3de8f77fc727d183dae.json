@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO user_profiles (user_id, profile_id) SELECT $1, p FROM unnest($2::uuid[]) AS p",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aa346f90d7a0608884c58d19804379c12d50463f63b4d3de8f77fc727d183dae"
+}
