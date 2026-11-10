@@ -129,9 +129,12 @@ echo "== populando tenants"
 OUT="$DATA/tenants.json"
 echo "[" > "$OUT.tmp"
 first=1
-while IFS='|' read -r slug id db; do
+# Lista lida antes do laço: `docker compose exec` consumiria o stdin do while.
+mapfile -t TENANT_ROWS < <(psql_db "$DB_CONTROL_NAME" -c "SELECT slug, id, db_name FROM tenants WHERE slug LIKE 'load-%' ORDER BY slug" </dev/null)
+for row in "${TENANT_ROWS[@]}"; do
+  IFS='|' read -r slug id db <<<"$row"
   if [ "$slug" = "load-000" ]; then n=$BIG_USERS; k=$BIG_TOKENS; t=$BIG_TARGETS; else n=$SMALL_USERS; k=$SMALL_TOKENS; t=$SMALL_TARGETS; fi
-  have=$(psql_db "$db" -c "SELECT count(*) FROM users WHERE email LIKE 'user%@load.test'")
+  have=$(psql_db "$db" -c "SELECT count(*) FROM users WHERE email LIKE 'user%@load.test'" </dev/null)
   if [ "$have" -lt "$n" ]; then
     echo "  $slug: $n usuários"
     populate_tenant "$db" "$n" "$k"
@@ -139,8 +142,10 @@ while IFS='|' read -r slug id db; do
   [ $first -eq 1 ] || echo "," >> "$OUT.tmp"
   first=0
   export_tenant "$slug" "$id" "$db" "$k" "$t" >> "$OUT.tmp"
-done < <(psql_db "$DB_CONTROL_NAME" -c "SELECT slug, id, db_name FROM tenants WHERE slug LIKE 'load-%' ORDER BY slug")
+done
 echo "]" >> "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
+OWNER_ID=$(psql_db "$DB_CONTROL_NAME" -c "SELECT id FROM platform_users WHERE role = 'owner'")
+printf '{"owner_id":"%s"}\n' "$OWNER_ID" > "$DATA/meta.json"
 echo "== pronto: $OUT"
 psql_db "$BIG_DB" -c "SELECT 'load-000: ' || count(*) || ' usuários, ' || (SELECT count(*) FROM user_feature_overrides) || ' exceções' FROM users"

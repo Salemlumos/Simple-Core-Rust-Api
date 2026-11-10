@@ -104,6 +104,8 @@ impl TenantPools {
             .max_connections(self.max_connections)
             .min_connections(0)
             .idle_timeout(Duration::from_secs(60))
+            // Sem ping a cada acquire: medido no README (01 -> 02).
+            .test_before_acquire(false)
             .acquire_timeout(self.acquire_timeout)
             .connect_lazy_with(opts);
         metrics::gauge!("tenant_pools_open").increment(1.0);

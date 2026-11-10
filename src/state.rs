@@ -70,6 +70,7 @@ impl AppState {
                 .max_connections(cfg.control_pool_max - 1)
                 .min_connections(0)
                 .idle_timeout(Duration::from_secs(60))
+                .test_before_acquire(false)
                 .acquire_timeout(cfg.acquire_timeout),
             control_options(&cfg, &db)?,
             db.connect_retry,

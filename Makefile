@@ -15,9 +15,9 @@ COMPOSE = docker compose --env-file $(ENV_FILE)
 WITH_ENV = bash scripts/with-env.sh $(ENV_FILE)
 
 # Padrões de ENV_FILE por modo (sobrescreva com ENV_FILE=...).
-up down logs reset: ENV_FILE ?= .env.docker
+up down logs reset load-populate load load-scenario: ENV_FILE ?= .env.docker
 up-external: ENV_FILE ?= .env.external
-db-up dev-init dev-api dev-worker sqlx-prepare sqlx-check test load-populate load load-scenario: ENV_FILE ?= .env.local
+db-up dev-init dev-api dev-worker sqlx-prepare sqlx-check test: ENV_FILE ?= .env.local
 
 .PHONY: help
 help:
