@@ -139,7 +139,7 @@ Não existe `DATABASE_URL`: as conexões são montadas por banco (`control` ou `
 | `LOGIN_RATE_*`, `LOGIN_RATE_WINDOW_SECONDS` | limites de login (plataforma precisa ser mais restritiva) | tenant 60/IP e 10/e-mail, plataforma 20 e 5, por 60 s |
 | `MIGRATE_CONCURRENCY` | tenants migrados em paralelo | 4 |
 | `SEED_OWNER_EMAIL`, `SEED_OWNER_NAME`, `SEED_OWNER_PASSWORD` (≥ 16), `SEED_TENANT_SLUG`, `SEED_TENANT_NAME` | seed, sem padrão | — |
-| `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_SHARED_BUFFERS`, `DB_PUBLISH_PORT` | container do PostgreSQL | 300 / 1GB / 5433 |
+| `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_SHARED_BUFFERS`, `DB_PUBLISH_PORT` | container do PostgreSQL (o padrão de 1150 cobre 110 pools × 10 conexões) | 1150 / 1GB / 5433 |
 | `API_CPUS`, `API_MEMORY`, `WORKER_CPUS`, `WORKER_MEMORY` | limites dos containers | 4 / 1g / 1 / 256m |
 
 **Orçamento de conexões.** A API não inicia se
@@ -386,4 +386,86 @@ make load-scenario S=get_by_id RATE=15000                   # um cenário
 Observação: "4 vCPUs" aqui são 2 núcleos físicos com SMT, e o Windows continua agendando trabalho do host nos mesmos
 núcleos da VM. Repetições do mesmo cenário variaram bastante (ver abaixo), principalmente no p99.
 
-RESULTADOS_PLACEHOLDER
+## Resultados
+
+Configuração final: imagem release (`lto="fat"`, mimalloc), `TENANT_POOL_MAX_CONNECTIONS=10`,
+`MAX_OPEN_TENANT_POOLS=110`, `CONTROL_POOL_MAX_CONNECTIONS=10`, PostgreSQL com `max_connections=1150`,
+`fsync`/`synchronous_commit` ligados. Cada linha: 30 s de aquecimento + 3 min de medição, taxa de chegada constante.
+Dados brutos em `load/results/30-final/` (JSON do k6, amostras de CPU/memória/conexões e contadores dos caches).
+
+| Cenário | Taxa pedida | RPS | p50 ms | p95 ms | p99 ms | Erros | CPU API méd/máx | Mem API máx | CPU PG méd/máx | Mem PG máx | Conexões runtime méd/máx | Acerto dos caches |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| get_by_id | 15000 | 14994 | 0.40 | 0.97 | 7.25 | 0.000% | 282% / 299% | 69 MiB | 178% / 191% | 482 MiB | 12 / 12 (ativas máx 3) | tenant_pool 100.00% tenant_registry 100.00% access 99.78% |
+| list | 4000 | 4000 | 0.49 | 0.64 | 0.75 | 0.000% | 98% / 112% | 72 MiB | 71% / 81% | 605 MiB | 12 / 12 (ativas máx 2) | tenant_pool 100.00% tenant_registry 100.00% access 99.17% |
+| mix_single | 9000 | 8989 | 0.44 | 2.43 | 14.01 | 0.000% | 211% / 235% | 72 MiB | 142% / 161% | 710 MiB | 20 / 20 (ativas máx 5) | tenant_pool 100.00% tenant_registry 100.00% access 99.63% |
+| mix_all | 9000 | 9000 | 0.46 | 2.08 | 3.07 | 0.000% | 213% / 225% | 103 MiB | 161% / 189% | 2862 MiB | 688 / 691 (ativas máx 6) | tenant_pool 100.00% tenant_registry 99.96% access 97.72% |
+| pool_churn | 8000 | 947 | 765.89 | 1532.24 | 1592.33 | 0.060% | 191% / 201% | 157 MiB | 382% / 389% | 1408 MiB | 137 / 237 (ativas máx 3) | tenant_pool 41.13% tenant_registry 99.65% access 84.39% |
+| noisy_neighbor (normais) | 1500 | 1500 | 0.44 | 0.76 | 1.18 | 0.000% | 163% / 196% | 115 MiB | 98% / 120% | 2715 MiB | 724 / 724 (ativas máx 1) | tenant_pool 100.00% tenant_registry 99.96% access 97.88% |
+| noisy_neighbor (barulhento, 6000/s) | 1500 | 6000 | 0.40 | 0.57 | 0.95 | 0.000% | 163% / 196% | 115 MiB | 98% / 120% | 2715 MiB | 724 / 724 (ativas máx 1) | tenant_pool 100.00% tenant_registry 99.96% access 97.88% |
+| login | 150 | 150 | 11.15 | 13.73 | 16.02 | 0.000% | 160% / 166% | 186 MiB | 10% / 21% | 2740 MiB | 238 / 729 (ativas máx 1) | tenant_pool 100.00% tenant_registry 99.98% |
+| create | 150 | 150 | 12.28 | 34.99 | 389.73 | 0.326% | 164% / 182% | 190 MiB | 10% / 13% | 950 MiB | 20 / 20 (ativas máx 10) | tenant_pool 100.00% tenant_registry 99.98% access 81.22% |
+| read_with_invalidations | 10000 | 9999 | 0.43 | 0.80 | 2.47 | 0.000% | 224% / 241% | 111 MiB | 149% / 157% | 954 MiB | 20 / 20 (ativas máx 3) | tenant_pool 100.00% tenant_registry 100.00% platform 98.34% access 80.17% |
+| read_with_provisioning | 10000 | 10000 | 0.39 | 0.58 | 1.48 | 0.000% | 214% / 228% | 115 MiB | 129% / 144% | 1154 MiB | 20 / 20 (ativas máx 2) | tenant_pool 100.00% tenant_registry 100.00% access 99.67% |
+
+CPU em % de um vCPU (400% = os 4 vCPUs). "Conexões" = conexões de `app_runtime` em `pg_stat_activity`.
+"Acerto dos caches" = hits/(hits+misses) durante a medição, por cache.
+
+### Metas
+
+| Meta | Resultado | |
+|---|---|---|
+| `GET` por id, um tenant, caches quentes: ≥ 15.000 RPS, p99 < 10 ms, sem erros | 14.994 RPS (taxa pedida 15.000, sem descartes relevantes), p99 7,25 ms, 0 erros | atingida |
+| Mistura em um tenant: ≥ 8.000 RPS, p99 < 25 ms, erros < 0,1% | 8.989 RPS (pedidos 9.000), p99 14,0 ms, 0 erros | atingida |
+
+O teste usa taxa constante: o RPS acompanha a taxa pedida e não mede a capacidade máxima acima dela. No `get_by_id` a
+API ficou em ~280% de CPU (de 400%), então há alguma folga, mas não foi medida.
+
+### Histórico de otimizações (uma alteração por vez)
+
+| # | Alteração | Cenário | Antes | Depois | Decisão |
+|---|---|---|---|---|---|
+| 01 | Linha de base (pool 10, `test_before_acquire` padrão) | `get_by_id` 15k/s | — | 12.926 RPS, p99 115 ms; repetição: 14.735 RPS, p99 68 ms | — |
+| 02 | `test_before_acquire(false)`: o sqlx fazia um ping no PostgreSQL a cada `acquire` | `get_by_id` 15k/s | p95 50,7 ms, p99 68,1 ms, CPU API 329%, PG 220% | 14.854 RPS, p95 3,0 ms, p99 29,6 ms, CPU API 290%, PG 181% | mantida |
+| 03 | mimalloc × alocador padrão (latência) | `get_by_id` ×2, `mix_single` | p99 29,6 / 14,3 ms; mix p99 3,18 ms | p99 19,8 / 27,8 ms; mix p99 3,14 ms | sem diferença além do ruído |
+| 04 | Pools para todos os tenants ativos: 3 conexões × 120 pools (antes 10 × 25) | `mix_all` 9k/s | 1.873 RPS, p99 1.520 ms, **78% de erros** (portas efêmeras esgotadas pela troca de pools: `Cannot assign requested address`) | 8.985 RPS, p99 6,5 ms, 0% | causa confirmada, ver #07 |
+| 05 | `net.ipv4.tcp_tw_reuse=1` no container da API | `pool_churn` | 1.832 RPS, **86,7% de erros** | 866–947 RPS, 0,06–0,4% de erros | mantida |
+| 06 | mimalloc (memória) | `login` 150/s | RSS da API 1.493 MiB (fragmentação das arenas da glibc com os buffers de 19 MiB do Argon2id em várias threads de `spawn_blocking`) | 133 MiB, mesma latência | **mimalloc mantido** (padrão da feature) |
+| 07 | 3 conexões por tenant eram poucas para o tenant quente | `get_by_id` | 3 conexões: 8.568 RPS, p50 92 ms (fila no pool, CPU da API 200%) | 6 conexões: p99 63 ms; 10 conexões: p99 10,7 ms | volta para 10 × 110 pools, `max_connections=1150` |
+
+Também foi corrigido o gerador: assinar JWTs por VU e copiar os tenants em cada VU deixava o k6 em 388% de CPU e
+4 GB de memória, limitando o `mix_all` a 4.322 RPS. Os tokens passaram a ser assinados uma vez, num `SharedArray`.
+
+Lições: a amostragem de `pg_stat_activity` a cada 5 s (máx. 5 conexões ativas) subestimou a concorrência real no
+pool; a decisão do tamanho do pool só ficou correta medindo latência com 3, 6 e 10 conexões. E há variância
+considerável entre execuções idênticas nesta máquina (01 contra a repetição), principalmente no p99.
+
+### Gargalos e observações
+
+- **Leitura num tenant (`get_by_id`)**: CPU da API (~280–300% dos 400%) e do PostgreSQL (~180%). Com os caches quentes,
+  a resolução do tenant e a autorização não vão ao banco (acerto de 99,8% no `access`, 100% em registro e pools);
+  sobra uma query por PK por requisição.
+- **Troca de pools (`pool_churn`, 20 pools para 100 tenants com tráfego uniforme)**: ~80% das requisições abrem uma
+  conexão nova. O limite é o **PostgreSQL saturado (≈ 385% de CPU) abrindo conexões** (fork do backend + SCRAM), em
+  ~950 RPS e p99 ~1,6 s. O `tcp_tw_reuse` eliminou os erros por portas esgotadas, mas a vazão continua limitada.
+  **Meta não aplicável, mas o resultado é ruim por natureza**: na prática, `MAX_OPEN_TENANT_POOLS` precisa cobrir os
+  tenants ativos (como no `mix_all`, que roda limpo); reduzir esse custo exigiria um pooler externo (PgBouncer, fora
+  de escopo).
+- **Mistura em todos os tenants (Zipf)**: 9.000 RPS, p99 3,1 ms, sem erros. O custo é o número de conexões abertas
+  (~690 com 100 tenants ativos): os pools são lazy, mas conexões de tenants com tráfego ficam abertas até 60 s ociosas.
+- **Tenant barulhento**: com um tenant a 6.000 req/s, os outros 98 tenants (1.500 req/s somados) ficaram com p99 de
+  1,2 ms. Cada tenant tem o próprio pool, então um tenant quente não esgota as conexões dos demais.
+- **Invalidações durante a leitura** (o tenant inteiro invalidado 2×/s): 9.999 RPS, p99 2,5 ms. O acerto do cache
+  `access` cai para 80%, e a coalescência do `try_get_with` evita a avalanche de recargas.
+- **Provisionamento durante a leitura** (um tenant novo a cada 10 s): 10.000 RPS, p99 1,5 ms, sem impacto visível.
+- **Login e POST**: limitados intencionalmente pelo Argon2id (`m=19456,t=2,p=1`, ~11 ms por hash). A 150 req/s, o
+  login ficou com p99 16 ms e 0 erros. O `POST /v1/users` teve p99 15 ms e 0 erros na bateria anterior (`20-final`),
+  mas nesta teve p99 390 ms e 0,33% de erros (503 por espera > 1 s no semáforo do hash) com a mesma configuração do
+  hash: sinal de interferência pontual de CPU (o host Windows divide os núcleos com a VM). Os parâmetros do Argon2id
+  nunca foram reduzidos para melhorar o benchmark.
+- **Memória**: API entre 70 e 190 MiB em todos os cenários (com mimalloc).
+
+### Limitações do ambiente
+
+- Docker Desktop no Windows (VM WSL2): o host continua usando os mesmos núcleos, o que aumenta a variância.
+- "4 vCPUs" = 2 núcleos físicos com SMT, para a API e para o PostgreSQL.
+- k6 na mesma máquina, em núcleos separados, falando com a API pela rede bridge do Docker.
