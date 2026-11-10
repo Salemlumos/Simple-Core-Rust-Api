@@ -14,8 +14,9 @@ name = "simple_core"
 path = "src/lib.rs"
 
 [features]
-default = []
-# Alocador alternativo. Mantido atrás de feature: só é usado se a medição mostrar ganho (ver README).
+default = ["mimalloc"]
+# mimalloc: medido no login (Argon2id, buffers de 19 MiB) 1493 MiB -> 133 MiB de RSS
+# sem perda de latência nos demais cenários (ver README). Desligue com --no-default-features.
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]

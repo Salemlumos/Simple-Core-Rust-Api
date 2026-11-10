@@ -24,13 +24,59 @@ const ISSUER = __ENV.JWT_ISSUER || 'simple-core';
 const OUT = __ENV.OUT || `/load/results/${RUN_ID}`;
 const LOAD_PASSWORD = 'load-password-123';
 
-const tenants = new SharedArray('tenants', () => JSON.parse(open('/load/data/tenants.json')));
 const meta = JSON.parse(open('/load/data/meta.json'));
 
-// Cada acesso a um elemento de SharedArray desserializa o elemento inteiro
-// (o tenant grande tem 20 mil ids): guarda uma cópia por VU.
-const tenantCache = [];
-const T = (i) => tenantCache[i] || (tenantCache[i] = tenants[i]);
+// ------------------------------------------------------------------ dados compartilhados
+//
+// Tudo que é grande fica em SharedArray de strings (uma cópia para todos os
+// VUs; acessar um elemento só desserializa aquela string). Os tokens dos
+// 5.950 usuários são assinados uma única vez aqui, não por VU.
+
+const b64 = (obj) => encoding.b64encode(JSON.stringify(obj), 'rawurl');
+const HEADER = b64({ alg: 'HS256', typ: 'JWT' });
+
+function sign(secret, claims) {
+  const body = `${HEADER}.${b64(claims)}`;
+  return `${body}.${crypto.hmac('sha256', secret, body, 'base64rawurl')}`;
+}
+
+function loadTenants() {
+  return JSON.parse(open('/load/data/tenants.json'));
+}
+
+// Por tenant: {slug, id, tok: [início, qtd], tgt: [início, qtd], profile}.
+const index = new SharedArray('index', () => {
+  let tok = 0;
+  let tgt = 0;
+  return loadTenants().map((t) => {
+    const e = { slug: t.slug, id: t.id, tok: [tok, t.tokens.length], tgt: [tgt, t.targets.length], profile: t.profiles[0] };
+    tok += t.tokens.length;
+    tgt += t.targets.length;
+    return e;
+  });
+});
+
+const jwts = new SharedArray('jwts', () => {
+  const iat = Math.floor(Date.now() / 1000);
+  const out = [];
+  for (const t of loadTenants()) {
+    for (const sub of t.tokens) {
+      out.push(sign(__ENV.JWT_TENANT_SECRET, { sub, tid: t.id, iat, exp: iat + 900, iss: ISSUER, aud: 'simple-core:tenant' }));
+    }
+  }
+  return out;
+});
+
+const targets = new SharedArray('targets', () => loadTenants().flatMap((t) => t.targets));
+
+// Índice pequeno (100 objetos) copiado uma vez por VU.
+const tenants = [];
+for (let i = 0; i < index.length; i++) tenants.push(index[i]);
+const T = (i) => tenants[i];
+
+const pickRange = (arr, [start, len]) => arr[start + Math.floor(Math.random() * len)];
+const tokenOf = (ti) => pickRange(jwts, T(ti).tok);
+const targetOf = (ti) => pickRange(targets, T(ti).tgt);
 
 // Vítimas de DELETE: [{t: índice do tenant, id}], embaralhadas de forma
 // determinística para espalhar os deletes pelos tenants.
@@ -69,31 +115,6 @@ function zipfTenant() {
   return lo;
 }
 
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-// ------------------------------------------------------------------ JWT
-
-const b64 = (obj) => encoding.b64encode(JSON.stringify(obj), 'rawurl');
-const HEADER = b64({ alg: 'HS256', typ: 'JWT' });
-
-function sign(secret, claims) {
-  const body = `${HEADER}.${b64(claims)}`;
-  return `${body}.${crypto.hmac('sha256', secret, body, 'base64rawurl')}`;
-}
-
-const tokenCache = {};
-function tenantToken(ti, sub) {
-  const key = `${ti}:${sub}`;
-  let t = tokenCache[key];
-  if (!t) {
-    const iat = Math.floor(Date.now() / 1000);
-    t = sign(__ENV.JWT_TENANT_SECRET, {
-      sub, tid: T(ti).id, iat, exp: iat + 900, iss: ISSUER, aud: 'simple-core:tenant',
-    });
-    tokenCache[key] = t;
-  }
-  return t;
-}
 
 let ownerToken;
 function platformToken() {
@@ -108,7 +129,7 @@ function platformToken() {
 
 function authParams(ti, op) {
   return {
-    headers: { Authorization: `Bearer ${tenantToken(ti, pick(T(ti).tokens))}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${tokenOf(ti)}`, 'Content-Type': 'application/json' },
     tags: { op },
   };
 }
@@ -118,16 +139,16 @@ http.setResponseCallback(http.expectedStatuses(200, 201, 202, 204));
 // ------------------------------------------------------------------ operações
 
 function getById(ti) {
-  http.get(`${BASE}/v1/users/${pick(T(ti).targets)}`, authParams(ti, 'get'));
+  http.get(`${BASE}/v1/users/${targetOf(ti)}`, authParams(ti, 'get'));
 }
 
 function list(ti) {
-  http.get(`${BASE}/v1/users?limit=50&after=${pick(T(ti).targets)}`, authParams(ti, 'list'));
+  http.get(`${BASE}/v1/users?limit=50&after=${targetOf(ti)}`, authParams(ti, 'list'));
 }
 
 function patchName(ti) {
   const body = JSON.stringify({ name: `Load ${Math.floor(Math.random() * 1e9)}` });
-  http.patch(`${BASE}/v1/users/${pick(T(ti).targets)}`, body, authParams(ti, 'patch'));
+  http.patch(`${BASE}/v1/users/${targetOf(ti)}`, body, authParams(ti, 'patch'));
 }
 
 function deleteVictim() {
@@ -159,7 +180,7 @@ const actions = {
   noisy: () => getById(1),
   normal: () => getById(2 + Math.floor(Math.random() * (tenants.length - 2))),
   login: () => {
-    const n = 1 + Math.floor(Math.random() * T(BIG).tokens.length);
+    const n = 1 + Math.floor(Math.random() * T(BIG).tok[1]);
     http.post(`${BASE}/v1/auth/login`, JSON.stringify({ email: `user${n}@load.test`, password: LOAD_PASSWORD }), {
       headers: { 'Content-Type': 'application/json', 'X-Tenant-Slug': T(BIG).slug },
       tags: { op: 'login' },
@@ -172,7 +193,7 @@ const actions = {
   invalidator: () => {
     // Alterna as features de um perfil do tenant grande: invalida o cache do tenant inteiro.
     const features = exec.scenario.iterationInTest % 2 === 0 ? ['users.read', 'access.read'] : ['users.read'];
-    http.put(`${BASE}/v1/profiles/${T(BIG).profiles[0]}/features`, JSON.stringify({ features }), {
+    http.put(`${BASE}/v1/profiles/${T(BIG).profile}/features`, JSON.stringify({ features }), {
       headers: { Authorization: `Bearer ${platformToken()}`, 'X-Tenant-Slug': T(BIG).slug, 'Content-Type': 'application/json' },
       tags: { op: 'invalidate' },
     });
@@ -210,10 +231,10 @@ function phased(action, rate, extra = {}, vus = VUS) {
   };
 }
 
-function background(action, rate) {
+function background(action, rate, timeUnit = '1s') {
   return {
     [`bg_${action}`]: {
-      executor: 'constant-arrival-rate', rate, timeUnit: '1s', preAllocatedVUs: 5, maxVUs: 20,
+      executor: 'constant-arrival-rate', rate, timeUnit, preAllocatedVUs: 5, maxVUs: 20,
       duration: WARMUP === '0s' ? DURATION : `${parseInt(WARMUP, 10) + parseInt(DURATION, 10)}s`,
       exec: 'run', env: { ACTION: action }, tags: { phase: 'background', action },
     },
@@ -228,13 +249,13 @@ const definitions = {
   mix_all: () => phased('mix_all', RATE),
   pool_churn: () => phased('pool_churn', RATE),
   noisy_neighbor: () => ({
-    ...phased('normal', RATE, { tags: { group: 'normal' } }),
-    ...phased('noisy', NOISY_RATE, { prefix: 'noisy_', tags: { group: 'noisy' } }),
+    ...phased('normal', RATE, { tags: { tgroup: 'normal' } }),
+    ...phased('noisy', NOISY_RATE, { prefix: 'noisy_', tags: { tgroup: 'noisy' } }),
   }),
   login: () => phased('login', RATE),
   create: () => phased('create', RATE),
   read_with_invalidations: () => ({ ...phased('get_by_id', RATE), ...background('invalidator', 2) }),
-  read_with_provisioning: () => ({ ...phased('get_by_id', RATE), ...background('provisioner', 0.2) }),
+  read_with_provisioning: () => ({ ...phased('get_by_id', RATE), ...background('provisioner', 1, '10s') }),
 };
 
 const measureThresholds = {
@@ -244,9 +265,9 @@ const measureThresholds = {
 };
 if (SCENARIO === 'noisy_neighbor') {
   for (const g of ['normal', 'noisy']) {
-    measureThresholds[`http_req_duration{phase:measure,group:${g}}`] = ['p(99)<1000000'];
-    measureThresholds[`http_reqs{phase:measure,group:${g}}`] = ['count>=0'];
-    measureThresholds[`http_req_failed{phase:measure,group:${g}}`] = ['rate<=1'];
+    measureThresholds[`http_req_duration{phase:measure,tgroup:${g}}`] = ['p(99)<1000000'];
+    measureThresholds[`http_reqs{phase:measure,tgroup:${g}}`] = ['count>=0'];
+    measureThresholds[`http_req_failed{phase:measure,tgroup:${g}}`] = ['rate<=1'];
   }
 }
 for (const op of ['get', 'list', 'patch', 'delete', 'invalidate', 'provision']) {
@@ -278,8 +299,8 @@ export function handleSummary(data) {
   const dropped = data.metrics.dropped_iterations ? data.metrics.dropped_iterations.values.count : 0;
   let md = '';
   if (SCENARIO === 'noisy_neighbor') {
-    md += `${row(data, ',group:normal', `${SCENARIO} (normais)`)}\n`;
-    md += `${row(data, ',group:noisy', `${SCENARIO} (barulhento, ${NOISY_RATE}/s)`)}\n`;
+    md += `${row(data, ',tgroup:normal', `${SCENARIO} (normais)`)}\n`;
+    md += `${row(data, ',tgroup:noisy', `${SCENARIO} (barulhento, ${NOISY_RATE}/s)`)}\n`;
   } else {
     md += `${row(data, '', SCENARIO)}\n`;
   }

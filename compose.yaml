@@ -48,7 +48,7 @@ services:
     command:
       - postgres
       - -c
-      - max_connections=${POSTGRES_MAX_CONNECTIONS:-300}
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-400}
       - -c
       - shared_buffers=${POSTGRES_SHARED_BUFFERS:-1GB}
       - -c
@@ -124,6 +124,10 @@ services:
     <<: *app
     command: ["serve"]
     init: true
+    # Troca de pools abre/fecha muitas conexões de saída; reaproveita portas em
+    # TIME_WAIT para não esgotar as portas efêmeras (medido no README).
+    sysctls:
+      net.ipv4.tcp_tw_reuse: 1
     restart: unless-stopped
     stop_grace_period: 20s
     cpus: ${API_CPUS:-4}
@@ -138,8 +142,8 @@ services:
       JWT_TENANT_SECRET: ${JWT_TENANT_SECRET:?JWT_TENANT_SECRET is required}
       API_INSTANCES: ${API_INSTANCES:-1}
       CONTROL_POOL_MAX_CONNECTIONS: ${CONTROL_POOL_MAX_CONNECTIONS:-10}
-      TENANT_POOL_MAX_CONNECTIONS: ${TENANT_POOL_MAX_CONNECTIONS:-10}
-      MAX_OPEN_TENANT_POOLS: ${MAX_OPEN_TENANT_POOLS:-25}
+      TENANT_POOL_MAX_CONNECTIONS: ${TENANT_POOL_MAX_CONNECTIONS:-3}
+      MAX_OPEN_TENANT_POOLS: ${MAX_OPEN_TENANT_POOLS:-120}
       PG_CONNECTION_RESERVE: ${PG_CONNECTION_RESERVE:-20}
       ACCESS_CACHE_CAPACITY: ${ACCESS_CACHE_CAPACITY:-200000}
       LOGIN_RATE_TENANT_PER_IP: ${LOGIN_RATE_TENANT_PER_IP:-60}
