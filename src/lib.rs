@@ -7,6 +7,7 @@ pub mod cli;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod openapi;
 pub mod password;
 pub mod platform;
 pub mod state;

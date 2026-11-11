@@ -101,6 +101,7 @@ impl Env {
         ApiConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             metrics_bind: "127.0.0.1:0".parse().unwrap(),
+            api_docs: false,
             jwt_issuer: "simple-core-test".into(),
             jwt_platform_secret: Secret::new(self.jwt_platform.clone()),
             jwt_tenant_secret: Secret::new(self.jwt_tenant.clone()),

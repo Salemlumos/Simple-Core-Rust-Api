@@ -6,6 +6,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::repository::{self as repo, PlatformUserOut, TenantOut};
@@ -13,6 +14,7 @@ use crate::access::repository::audit_as;
 use crate::auth::middleware::Platform;
 use crate::db::{is_unique_violation, is_valid_slug, tenant_db_name};
 use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult};
+use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 use crate::tenancy::registry::{TenantInfo, TenantStatus};
 use crate::users::handlers::{CreateUser, ListQuery};
@@ -21,6 +23,9 @@ use crate::users::repository::{self as users_repo, NewUser};
 
 // ---------------------------------------------------------------- me
 
+/// Dados do usuário de plataforma logado.
+#[utoipa::path(get, path = "/v1/platform/me", tag = "plataforma",
+    responses((status = 200, description = "Usuário logado", body = PlatformUserOut)))]
 pub async fn me(State(st): State<AppState>, Platform(actor): Platform) -> AppResult<Json<PlatformUserOut>> {
     repo::get_platform_user(&st.control, actor.id)
         .await?
@@ -28,7 +33,7 @@ pub async fn me(State(st): State<AppState>, Platform(actor): Platform) -> AppRes
         .ok_or(AppError::Unauthorized)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchMe {
     pub name: Option<String>,
@@ -36,6 +41,15 @@ pub struct PatchMe {
     pub current_password: Option<String>,
 }
 
+/// Altera o próprio nome ou a própria senha (exige `current_password`).
+///
+/// Trocar a senha revoga todas as sessões.
+#[utoipa::path(patch, path = "/v1/platform/me", tag = "plataforma",
+    request_body = PatchMe,
+    responses(
+        (status = 200, description = "Usuário atualizado", body = PlatformUserOut),
+        (status = 403, description = "Senha atual inválida", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn patch_me(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -87,6 +101,10 @@ pub async fn patch_me(
 
 // ---------------------------------------------------------------- tenants
 
+/// Lista os tenants (paginação por cursor).
+#[utoipa::path(get, path = "/v1/platform/tenants", tag = "plataforma: tenants",
+    params(ListQuery),
+    responses((status = 200, description = "Página de tenants", body = Page<TenantOut>)))]
 pub async fn list_tenants(
     State(st): State<AppState>,
     _: Platform,
@@ -97,6 +115,10 @@ pub async fn list_tenants(
     Ok(Json(page(items, limit, |t| t.id)))
 }
 
+/// Busca um tenant pelo id (inclui status e último erro de provisionamento).
+#[utoipa::path(get, path = "/v1/platform/tenants/{id}", tag = "plataforma: tenants",
+    params(("id" = Uuid, Path, description = "Id do tenant")),
+    responses((status = 200, description = "Tenant", body = TenantOut)))]
 pub async fn get_tenant(
     State(st): State<AppState>,
     _: Platform,
@@ -108,14 +130,21 @@ pub async fn get_tenant(
         .ok_or(AppError::NotFound)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateTenant {
+    /// Usado no header `X-Tenant-Slug`: `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`.
     pub slug: String,
     pub name: String,
 }
 
 /// Grava o tenant como `provisioning` e retorna 202; o worker cria o banco.
+#[utoipa::path(post, path = "/v1/platform/tenants", tag = "plataforma: tenants",
+    request_body = CreateTenant,
+    responses(
+        (status = 202, description = "Tenant registrado como `provisioning`; o worker cria o banco", body = TenantOut),
+        (status = 409, description = "Slug já usado", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn create_tenant(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -156,13 +185,25 @@ pub async fn create_tenant(
     Ok((StatusCode::ACCEPTED, Json(t)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchTenant {
     pub name: Option<String>,
+    /// `active` ou `suspended`.
+    #[schema(example = "suspended")]
     pub status: Option<String>,
 }
 
+/// Renomeia, suspende ou reativa um tenant.
+///
+/// A suspensão vale para todas as instâncias da API em poucos milissegundos.
+#[utoipa::path(patch, path = "/v1/platform/tenants/{id}", tag = "plataforma: tenants",
+    params(("id" = Uuid, Path, description = "Id do tenant")),
+    request_body = PatchTenant,
+    responses(
+        (status = 200, description = "Tenant atualizado", body = TenantOut),
+        (status = 409, description = "O status só muda entre `active` e `suspended`", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn patch_tenant(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -207,6 +248,13 @@ pub async fn patch_tenant(
     Ok(Json(t))
 }
 
+/// Retoma o provisionamento de um tenant com status `failed`.
+#[utoipa::path(post, path = "/v1/platform/tenants/{id}/retry", tag = "plataforma: tenants",
+    params(("id" = Uuid, Path, description = "Id do tenant")),
+    responses(
+        (status = 202, description = "Tenant voltou para `provisioning`", body = TenantOut),
+        (status = 409, description = "O tenant não está `failed`", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn retry_tenant(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -226,6 +274,10 @@ pub async fn retry_tenant(
 
 // ---------------------------------------------------------------- superusuários
 
+/// Lista os superusuários.
+#[utoipa::path(get, path = "/v1/platform/superusers", tag = "plataforma: superusuários",
+    params(ListQuery),
+    responses((status = 200, description = "Página de superusuários", body = Page<PlatformUserOut>)))]
 pub async fn list_superusers(
     State(st): State<AppState>,
     _: Platform,
@@ -236,6 +288,13 @@ pub async fn list_superusers(
     Ok(Json(page(items, limit, |u| u.id)))
 }
 
+/// Cria um superusuário.
+#[utoipa::path(post, path = "/v1/platform/superusers", tag = "plataforma: superusuários",
+    request_body = CreateUser,
+    responses(
+        (status = 201, description = "Superusuário criado", body = PlatformUserOut),
+        (status = 409, description = "E-mail já usado", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn create_superuser(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -271,7 +330,7 @@ pub async fn create_superuser(
     Ok((StatusCode::CREATED, Json(u)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchSuperuser {
     pub name: Option<String>,
@@ -279,6 +338,13 @@ pub struct PatchSuperuser {
     pub is_active: Option<bool>,
 }
 
+/// Altera nome, senha ou status de um superusuário.
+///
+/// Trocar a senha ou desativar revoga as sessões dele.
+#[utoipa::path(patch, path = "/v1/platform/superusers/{id}", tag = "plataforma: superusuários",
+    params(("id" = Uuid, Path, description = "Id do superusuário")),
+    request_body = PatchSuperuser,
+    responses((status = 200, description = "Superusuário atualizado", body = PlatformUserOut)))]
 pub async fn patch_superuser(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -319,6 +385,10 @@ pub async fn patch_superuser(
     Ok(Json(u))
 }
 
+/// Remove um superusuário.
+#[utoipa::path(delete, path = "/v1/platform/superusers/{id}", tag = "plataforma: superusuários",
+    params(("id" = Uuid, Path, description = "Id do superusuário")),
+    responses((status = 204, description = "Superusuário removido")))]
 pub async fn delete_superuser(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -345,6 +415,13 @@ async fn tenant_for_admins(st: &AppState, id: Uuid, require_active: bool) -> App
     }
 }
 
+/// Lista os admins de um tenant.
+#[utoipa::path(get, path = "/v1/platform/tenants/{id}/admins", tag = "plataforma: admins de tenant",
+    params(("id" = Uuid, Path, description = "Id do tenant"), ListQuery),
+    responses(
+        (status = 200, description = "Página de admins", body = Page<UserOut>),
+        (status = 409, description = "Tenant não está ativo nem suspenso", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn list_admins(
     State(st): State<AppState>,
     _: Platform,
@@ -359,6 +436,13 @@ pub async fn list_admins(
 }
 
 /// Cria um novo usuário com `is_tenant_admin = true` (tenant precisa estar ativo).
+#[utoipa::path(post, path = "/v1/platform/tenants/{id}/admins", tag = "plataforma: admins de tenant",
+    params(("id" = Uuid, Path, description = "Id do tenant")),
+    request_body = CreateUser,
+    responses(
+        (status = 201, description = "Admin criado", body = UserOut),
+        (status = 409, description = "E-mail já usado ou tenant não está ativo", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn create_admin(
     State(st): State<AppState>,
     Platform(actor): Platform,
@@ -407,6 +491,15 @@ pub async fn create_admin(
 }
 
 /// Remove o status de admin, mantendo o usuário.
+#[utoipa::path(delete, path = "/v1/platform/tenants/{id}/admins/{user_id}", tag = "plataforma: admins de tenant",
+    params(
+        ("id" = Uuid, Path, description = "Id do tenant"),
+        ("user_id" = Uuid, Path, description = "Id do usuário admin"),
+    ),
+    responses(
+        (status = 204, description = "O usuário deixou de ser admin"),
+        (status = 409, description = "Tenant não está ativo nem suspenso", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn delete_admin(
     State(st): State<AppState>,
     Platform(actor): Platform,

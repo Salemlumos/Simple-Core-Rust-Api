@@ -5,6 +5,7 @@ API REST multi-tenant de usuários com controle de acesso, focada em baixa latê
 - Rust estável (1.99), Tokio, Axum 0.8, Tower
 - PostgreSQL 18 com SQLx 0.9 (queries verificadas em compilação, modo offline com `.sqlx`)
 - `moka` (caches), `argon2` (Argon2id), `jsonwebtoken` (HS256), `tracing` (JSON não bloqueante), métricas Prometheus
+- OpenAPI 3.1 gerada do código (`utoipa`) com Swagger UI em `/docs`
 - Docker Compose (perfis `db` e `app`) e k6 para carga
 
 Um único binário, `api`, com os comandos `bootstrap`, `migrate`, `seed`, `serve`, `worker` e `healthcheck`.
@@ -14,13 +15,14 @@ Um único binário, `api`, com os comandos `bootstrap`, `migrate`, `seed`, `serv
 ## Sumário
 
 1. [Execução](#execução)
-2. [Variáveis de ambiente](#variáveis-de-ambiente)
-3. [Banco gerenciado (DB_BOOTSTRAP=false)](#banco-gerenciado-db_bootstrapfalse)
-4. [Migrar do banco em container para um banco externo](#migrar-do-banco-em-container-para-um-banco-externo)
-5. [Arquitetura e decisões técnicas](#arquitetura-e-decisões-técnicas)
-6. [Testes](#testes)
-7. [Testes de carga](#testes-de-carga)
-8. [Resultados](#resultados)
+2. [Documentação da API (Swagger)](#documentação-da-api-swagger)
+3. [Variáveis de ambiente](#variáveis-de-ambiente)
+4. [Banco gerenciado (DB_BOOTSTRAP=false)](#banco-gerenciado-db_bootstrapfalse)
+5. [Migrar do banco em container para um banco externo](#migrar-do-banco-em-container-para-um-banco-externo)
+6. [Arquitetura e decisões técnicas](#arquitetura-e-decisões-técnicas)
+7. [Testes](#testes)
+8. [Testes de carga](#testes-de-carga)
+9. [Resultados](#resultados)
 
 ---
 
@@ -58,6 +60,7 @@ para o perfil `app` funcionar sem o banco do projeto). Não exige Rust nem Postg
 ```bash
 make up
 curl localhost:8080/health/ready
+# Swagger UI (com API_DOCS=true, o padrão do .env.docker.example): http://localhost:8080/docs
 make logs
 make down       # mantém o volume
 make reset      # apaga SOMENTE o volume do PostgreSQL do projeto (pede confirmação; recusado com .env.external)
@@ -115,6 +118,50 @@ Todos os comandos que acessam o banco repetem a conexão até `DB_CONNECT_RETRY_
 
 ---
 
+## Documentação da API (Swagger)
+
+Com `API_DOCS=true`, a API serve:
+
+| Caminho | Conteúdo |
+|---|---|
+| `/docs` | Swagger UI, para navegar e testar os endpoints |
+| `/openapi.json` | Especificação OpenAPI 3.1, para gerar clientes ou importar no Postman, Insomnia ou Bruno |
+
+O padrão é `false`: em produção nada disso é exposto e as rotas respondem 404. Os modelos `.env.docker.example` e
+`.env.local.example` ligam a opção; o `.env.external.example` a deixa desligada.
+
+**Testar pelo Swagger UI:**
+
+1. Abra `http://localhost:8080/docs`.
+2. Faça login:
+   - usuário de tenant: `POST /v1/auth/login`, informando o slug do tenant no campo `X-Tenant-Slug`;
+   - owner ou superusuário: `POST /v1/platform/auth/login`.
+3. Copie o `access_token` da resposta.
+4. Clique em **Authorize** e cole o token no esquema correspondente (`tenant_token` ou `platform_token`).
+5. Com token de plataforma, as rotas de tenant (`/v1/users`, `/v1/profiles` etc.) também precisam do campo
+   `X-Tenant-Slug`.
+
+**Como a documentação é gerada (`src/openapi.rs`):**
+
+- Cada handler declara caminho, parâmetros, corpo e respostas específicas com `#[utoipa::path]`. Os tipos de
+  requisição e resposta derivam `ToSchema`, e os comentários `///` viram as descrições.
+- A regra de acesso **não é escrita à mão**. Ela é aplicada a partir das mesmas `RouteDef` que montam o roteador e
+  o middleware `enforce`:
+  - esquema de segurança exigido;
+  - feature necessária, descrita no texto da rota;
+  - header `X-Tenant-Slug` nas rotas de tenant;
+  - respostas de erro comuns: 401, 403, 404, 422, 503 etc., no formato `application/problem+json`.
+- Testes unitários falham se:
+  - uma rota do roteador não estiver documentada, ou se a documentação tiver uma rota que não existe;
+  - a segurança de alguma rota divergir do `Access` declarado;
+  - um parâmetro de caminho estiver faltando;
+  - houver `operationId` repetido.
+- Desempenho: a especificação é montada uma vez, na inicialização. O Swagger UI fica fora dos middlewares de
+  autorização e de métricas, e os arquivos estáticos já vêm embutidos no binário (feature `vendored`; o build não
+  baixa nada). As rotas da API não passam por nenhum código novo.
+
+---
+
 ## Variáveis de ambiente
 
 Não existe `DATABASE_URL`: as conexões são montadas por banco (`control` ou `tenant_*`) e por role.
@@ -131,6 +178,7 @@ Não existe `DATABASE_URL`: as conexões são montadas por banco (`control` ou `
 | `API_BIND` | endereço da API (`0.0.0.0:8080` em container, `127.0.0.1:8080` local) | `127.0.0.1:8080` |
 | `API_PORT` | porta publicada no host pelo Compose | 8080 |
 | `METRICS_BIND`, `WORKER_METRICS_BIND` | `/metrics` em porta interna (não publicada por padrão) | `127.0.0.1:9090` / `:9091` |
+| `API_DOCS` | serve Swagger UI em `/docs` e a especificação em `/openapi.json` | `false` |
 | `JWT_PLATFORM_SECRET`, `JWT_TENANT_SECRET` | segredos distintos, ≥ 32 bytes | — |
 | `JWT_ISSUER` | `iss` dos tokens | `simple-core` |
 | `API_INSTANCES`, `MAX_OPEN_TENANT_POOLS`, `TENANT_POOL_MAX_CONNECTIONS`, `CONTROL_POOL_MAX_CONNECTIONS`, `PG_CONNECTION_RESERVE` | orçamento de conexões (abaixo) | 1 / 50 / 10 / 10 / 10 |
@@ -205,6 +253,7 @@ src/app.rs               roteador, middlewares globais, /metrics, serve
 src/config.rs            configuração só por ambiente; Secret nunca aparece em Debug
 src/state.rs             AppState, invalidação de cache e PgListener
 src/error.rs             RFC 9457 (application/problem+json)
+src/openapi.rs           especificação OpenAPI (utoipa) e Swagger UI
 src/password.rs          Argon2id em spawn_blocking + Semaphore
 src/auth/                jwt, login/refresh/logout, middleware de acesso, rate limit
 src/tenancy/             registro de tenants, pools por tenant, resolução do tenant, provisionamento
@@ -326,7 +375,7 @@ make fmt lint sqlx-check
 ```
 
 Cada teste de integração cria o próprio `control` (`test_<uuid>`) e seus tenants num PostgreSQL real, então os testes
-rodam em paralelo; ao final os bancos são removidos. Cobertura (38 testes):
+rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 unitários e 30 de integração):
 
 - **Plataforma** (`tests/platform.rs`): só o owner cria tenants/superusuários/admins (superusuário, admin e usuário
   comum → 403); superusuário entra em todos os tenants mas não altera `is_tenant_admin`; ninguém cria, altera ou exclui
@@ -345,6 +394,9 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (38 testes):
   interrompido em cada uma das 5 etapas e retomado; `migrate` com um tenant falhando sem afetar os outros e retornando
   erro; remoção de pool do cache com consulta em andamento e LRU com capacidade 2; bootstrap idempotente e modo de
   validação.
+- **Documentação** (`tests/docs.rs` e `src/openapi.rs`): `/docs` e `/openapi.json` só existem com `API_DOCS=true` e
+  não liberam as rotas da API; a especificação cobre exatamente as rotas do roteador, com segurança e parâmetros
+  coerentes com o `Access` de cada uma.
 
 ---
 

@@ -4,6 +4,7 @@
 use serde::Serialize;
 use sqlx::{PgConnection, PgExecutor};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 pub async fn audit(
@@ -29,12 +30,14 @@ pub async fn audit(
     .map(drop)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TenantOut {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+    /// `provisioning`, `active`, `failed` ou `suspended`.
     pub status: String,
+    /// Último erro de provisionamento (quando `failed`).
     pub last_error: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -126,11 +129,12 @@ pub async fn retry_tenant(conn: &mut PgConnection, id: Uuid) -> Result<Option<Te
     .await
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PlatformUserOut {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    /// `owner` ou `superuser`.
     pub role: String,
     pub is_active: bool,
     #[serde(with = "time::serde::rfc3339")]

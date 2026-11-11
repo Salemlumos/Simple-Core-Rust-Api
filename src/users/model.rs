@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, FieldError};
@@ -60,7 +61,7 @@ pub fn login_email(raw: &str) -> String {
     raw.trim().to_lowercase()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UserOut {
     pub id: Uuid,
     pub email: String,
@@ -73,9 +74,10 @@ pub struct UserOut {
     pub updated_at: OffsetDateTime,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Page<T> {
     pub items: Vec<T>,
+    /// Cursor da próxima página (`after`); `null` na última.
     pub next_after: Option<Uuid>,
 }
 

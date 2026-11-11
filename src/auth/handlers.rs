@@ -10,34 +10,39 @@ use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::middleware::{Platform, Tenant};
 use super::ratelimit::Scope;
 use super::{ClientIp, new_refresh_token, sha256};
 use crate::error::{ApiJson, AppError, AppResult};
+use crate::openapi::Problem;
 use crate::state::AppState;
 use crate::tenancy::middleware::{Actor, TENANT_HEADER};
 use crate::tenancy::registry::{TenantInfo, TenantStatus};
 use crate::users::model::{UserOut, login_email};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginReq {
     pub email: String,
     pub password: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshReq {
     pub refresh_token: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct TokenResp {
+    /// JWT de acesso; envie como `Authorization: Bearer <token>`.
     pub access_token: String,
+    #[schema(value_type = String, example = "Bearer")]
     pub token_type: &'static str,
+    /// Validade do access token, em segundos.
     pub expires_in: i64,
     pub refresh_token: String,
 }
@@ -65,6 +70,19 @@ async fn login_tenant(st: &AppState, slug: &str) -> AppResult<Option<std::sync::
 
 // ---------------------------------------------------------------- tenant
 
+/// Login de usuário de tenant.
+///
+/// Credenciais inválidas, tenant inexistente e conta inativa respondem o mesmo 401.
+#[utoipa::path(post, path = "/v1/auth/login", tag = "autenticação",
+    params(("X-Tenant-Slug" = String, Header, description = "Slug do tenant")),
+    request_body = LoginReq,
+    responses(
+        (status = 200, description = "Tokens emitidos", body = TokenResp),
+        (status = 400, description = "Header X-Tenant-Slug ausente", body = Problem, content_type = "application/problem+json"),
+        (status = 401, description = "Credenciais inválidas", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Tenant suspenso", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Limite de tentativas de login", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn tenant_login(
     State(st): State<AppState>,
     ClientIp(ip): ClientIp,
@@ -115,6 +133,18 @@ async fn insert_tenant_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exec:
     Ok(token)
 }
 
+/// Troca um refresh token de tenant por um novo par de tokens.
+///
+/// O refresh token usado é revogado. Reusar um token já revogado encerra
+/// todas as sessões do usuário.
+#[utoipa::path(post, path = "/v1/auth/refresh", tag = "autenticação",
+    params(("X-Tenant-Slug" = String, Header, description = "Slug do tenant")),
+    request_body = RefreshReq,
+    responses(
+        (status = 200, description = "Tokens emitidos", body = TokenResp),
+        (status = 401, description = "Refresh token inválido, expirado ou revogado", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Tenant suspenso", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn tenant_refresh(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -166,6 +196,10 @@ pub async fn tenant_refresh(
     }))
 }
 
+/// Revoga um refresh token do usuário logado.
+#[utoipa::path(post, path = "/v1/auth/logout", tag = "autenticação",
+    request_body = RefreshReq,
+    responses((status = 204, description = "Refresh token revogado")))]
 pub async fn tenant_logout(Tenant(ctx): Tenant, ApiJson(b): ApiJson<RefreshReq>) -> AppResult<StatusCode> {
     sqlx::query!(
         "UPDATE refresh_tokens SET revoked_at = now()
@@ -178,20 +212,25 @@ pub async fn tenant_logout(Tenant(ctx): Tenant, ApiJson(b): ApiJson<RefreshReq>)
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct TenantRef {
     pub id: Uuid,
     pub slug: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct MeResp {
     #[serde(flatten)]
     pub user: UserOut,
     pub tenant: TenantRef,
+    /// Códigos das features efetivas (admins recebem todas).
+    #[schema(value_type = Vec<String>)]
     pub features: Vec<&'static str>,
 }
 
+/// Dados do usuário logado, o tenant e as features efetivas.
+#[utoipa::path(get, path = "/v1/me", tag = "autenticação",
+    responses((status = 200, description = "Usuário logado", body = MeResp)))]
 pub async fn tenant_me(Tenant(ctx): Tenant) -> AppResult<Json<MeResp>> {
     let Actor::Tenant { id, principal } = &ctx.actor else {
         return Err(AppError::Forbidden("tenant token required"));
@@ -221,6 +260,14 @@ pub async fn tenant_me(Tenant(ctx): Tenant) -> AppResult<Json<MeResp>> {
 
 // ---------------------------------------------------------------- plataforma
 
+/// Login de usuário de plataforma (owner ou superusuário).
+#[utoipa::path(post, path = "/v1/platform/auth/login", tag = "plataforma: autenticação",
+    request_body = LoginReq,
+    responses(
+        (status = 200, description = "Tokens emitidos", body = TokenResp),
+        (status = 401, description = "Credenciais inválidas", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Limite de tentativas de login", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn platform_login(
     State(st): State<AppState>,
     ClientIp(ip): ClientIp,
@@ -266,6 +313,15 @@ async fn insert_platform_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exe
     Ok(token)
 }
 
+/// Troca um refresh token de plataforma por um novo par de tokens.
+///
+/// Reusar um token já revogado encerra todas as sessões do usuário.
+#[utoipa::path(post, path = "/v1/platform/auth/refresh", tag = "plataforma: autenticação",
+    request_body = RefreshReq,
+    responses(
+        (status = 200, description = "Tokens emitidos", body = TokenResp),
+        (status = 401, description = "Refresh token inválido, expirado ou revogado", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn platform_refresh(
     State(st): State<AppState>,
     ApiJson(b): ApiJson<RefreshReq>,
@@ -313,6 +369,10 @@ pub async fn platform_refresh(
     }))
 }
 
+/// Revoga um refresh token do usuário de plataforma logado.
+#[utoipa::path(post, path = "/v1/platform/auth/logout", tag = "plataforma: autenticação",
+    request_body = RefreshReq,
+    responses((status = 204, description = "Refresh token revogado")))]
 pub async fn platform_logout(
     State(st): State<AppState>,
     Platform(actor): Platform,

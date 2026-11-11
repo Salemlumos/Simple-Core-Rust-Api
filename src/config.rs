@@ -177,6 +177,8 @@ pub struct RateLimit {
 pub struct ApiConfig {
     pub bind: SocketAddr,
     pub metrics_bind: SocketAddr,
+    /// Serve Swagger UI em `/docs` e a especificação em `/openapi.json`.
+    pub api_docs: bool,
     pub jwt_issuer: String,
     pub jwt_platform_secret: Secret,
     pub jwt_tenant_secret: Secret,
@@ -210,6 +212,7 @@ impl ApiConfig {
         let cfg = Self {
             bind: env_parse("API_BIND", "127.0.0.1:8080".parse::<SocketAddr>()?)?,
             metrics_bind: env_parse("METRICS_BIND", "127.0.0.1:9090".parse::<SocketAddr>()?)?,
+            api_docs: env_bool("API_DOCS", false)?,
             jwt_issuer: env_opt("JWT_ISSUER").unwrap_or_else(|| "simple-core".into()),
             jwt_platform_secret: Secret(env_req("JWT_PLATFORM_SECRET")?),
             jwt_tenant_secret: Secret(env_req("JWT_TENANT_SECRET")?),

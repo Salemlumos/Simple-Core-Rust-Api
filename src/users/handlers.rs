@@ -5,6 +5,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::model::{Page, UserOut, Validator, page, page_limit};
@@ -13,16 +14,26 @@ use crate::access::catalog::Feature;
 use crate::access::repository::audit;
 use crate::auth::middleware::Tenant;
 use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult};
+use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateUser {
+    /// Normalizado para minúsculas; único no tenant.
     pub email: String,
     pub name: String,
+    /// 12 a 128 caracteres.
     pub password: String,
 }
 
+/// Cria um usuário comum no tenant.
+#[utoipa::path(post, path = "/v1/users", tag = "usuários",
+    request_body = CreateUser,
+    responses(
+        (status = 201, description = "Usuário criado", body = UserOut),
+        (status = 409, description = "E-mail já usado no tenant", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn create(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,
@@ -69,39 +80,64 @@ fn conflict_on_email(e: sqlx::Error) -> AppError {
     }
 }
 
+/// Busca um usuário pelo id.
+#[utoipa::path(get, path = "/v1/users/{id}", tag = "usuários",
+    params(("id" = Uuid, Path, description = "Id do usuário")),
+    responses((status = 200, description = "Usuário", body = UserOut)))]
 pub async fn get(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> AppResult<Json<UserOut>> {
     repo::get(ctx.db(), id).await?.map(Json).ok_or(AppError::NotFound)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
+    /// Itens por página (1 a 100, padrão 50).
     pub limit: Option<i64>,
+    /// Retorna os itens com id maior que este (valor de `next_after`).
     pub after: Option<Uuid>,
 }
 
+/// Lista os usuários do tenant (paginação por cursor, ordenada por id).
+#[utoipa::path(get, path = "/v1/users", tag = "usuários",
+    params(ListQuery),
+    responses((status = 200, description = "Página de usuários", body = Page<UserOut>)))]
 pub async fn list(Tenant(ctx): Tenant, ApiQuery(q): ApiQuery<ListQuery>) -> AppResult<Json<Page<UserOut>>> {
     let limit = page_limit(q.limit)?;
     let items = repo::list(ctx.db(), q.after.unwrap_or(Uuid::nil()), limit).await?;
     Ok(Json(page(items, limit, |u| u.id)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchUser {
+    /// O próprio usuário pode alterar sem a feature `users.update`.
     pub name: Option<String>,
+    /// Exige `users.update`.
     pub email: Option<String>,
+    /// Nova senha (12 a 128 caracteres). Revoga as sessões do usuário.
     pub password: Option<String>,
+    /// Obrigatória quando o próprio usuário troca a senha.
     pub current_password: Option<String>,
+    /// Exige `users.update`. Desativar revoga as sessões.
     pub is_active: Option<bool>,
 }
 
+/// Atualiza um usuário.
+///
 /// Regras:
 /// - o próprio usuário altera `name` sem feature; a própria senha exige `current_password`;
 /// - `email` e `is_active` exigem `users.update`;
 /// - admin de tenant só é alterado por usuário de plataforma (o próprio admin
 ///   pode trocar nome e senha);
 /// - não é possível desativar o último admin ativo.
+#[utoipa::path(patch, path = "/v1/users/{id}", tag = "usuários",
+    params(("id" = Uuid, Path, description = "Id do usuário")),
+    request_body = PatchUser,
+    responses(
+        (status = 200, description = "Usuário atualizado", body = UserOut),
+        (status = 409, description = "E-mail já usado ou último admin ativo", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn patch(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,
@@ -198,6 +234,13 @@ pub async fn patch(
     Ok(Json(user))
 }
 
+/// Remove um usuário. Admins só podem ser removidos por usuários de plataforma.
+#[utoipa::path(delete, path = "/v1/users/{id}", tag = "usuários",
+    params(("id" = Uuid, Path, description = "Id do usuário")),
+    responses(
+        (status = 204, description = "Usuário removido"),
+        (status = 409, description = "Último admin ativo", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn delete(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,

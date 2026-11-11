@@ -3,6 +3,7 @@
 use serde::Serialize;
 use sqlx::{PgConnection, PgExecutor};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::tenancy::middleware::TenantCtx;
@@ -53,10 +54,21 @@ pub async fn audit_as(
     .map(drop)
 }
 
-#[derive(Serialize)]
+/// Feature de um módulo do catálogo (apenas para a documentação; a lista vem
+/// montada em JSON pelo banco).
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct FeatureOut {
+    #[schema(example = "users.read")]
+    pub code: String,
+    pub name: String,
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct ModuleOut {
     pub code: String,
     pub name: String,
+    #[schema(value_type = Vec<FeatureOut>)]
     pub features: serde_json::Value,
 }
 
@@ -72,7 +84,7 @@ pub async fn modules<'e, E: PgExecutor<'e>>(exec: E) -> Result<Vec<ModuleOut>, s
     .await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ProfileOut {
     pub id: Uuid,
     pub name: String,
@@ -227,14 +239,16 @@ pub async fn features_of_profiles(conn: &mut PgConnection, profiles: &[Uuid]) ->
     .await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct OverrideOut {
     pub feature: String,
+    /// `allow` ou `deny` (deny sempre vence).
     pub effect: String,
     pub reason: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
     pub created_by: Uuid,
+    /// `tenant` ou `platform`.
     pub created_by_type: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -295,7 +309,7 @@ pub async fn delete_override(
     .await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ProfileRef {
     pub id: Uuid,
     pub name: String,

@@ -31,9 +31,11 @@ pub enum AppError {
     Internal(#[from] anyhow::Error),
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
 pub struct FieldError {
+    #[schema(value_type = String)]
     pub field: &'static str,
+    #[schema(value_type = String)]
     pub message: &'static str,
 }
 

@@ -42,8 +42,13 @@ pub fn router(state: AppState) -> Router {
             .route_layer(from_fn_with_state((state.clone(), d.access), enforce));
         r = r.route(d.path, mr);
     }
-    r.route_layer(from_fn(track_metrics))
-        .fallback(|| async { problem(StatusCode::NOT_FOUND, None, None) })
+    let mut r = r.route_layer(from_fn(track_metrics));
+    // Swagger UI fora do `enforce` e das métricas: conteúdo estático e público,
+    // servido só com API_DOCS=true.
+    if state.cfg.api_docs {
+        r = r.merge(crate::openapi::docs_router());
+    }
+    r.fallback(|| async { problem(StatusCode::NOT_FOUND, None, None) })
         .method_not_allowed_fallback(|| async { problem(StatusCode::METHOD_NOT_ALLOWED, None, None) })
         .layer(
             ServiceBuilder::new()
@@ -61,12 +66,20 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn live() -> impl IntoResponse {
+/// Liveness: o processo está de pé.
+#[utoipa::path(get, path = "/health/live", tag = "saúde",
+    responses((status = 200, description = "Processo ativo", body = crate::openapi::Health)))]
+pub(crate) async fn live() -> impl IntoResponse {
     axum::Json(serde_json::json!({ "status": "ok" }))
 }
 
-/// Verifica apenas o banco `control`.
-async fn ready(State(st): State<AppState>) -> Response {
+/// Readiness: verifica apenas o banco `control`.
+#[utoipa::path(get, path = "/health/ready", tag = "saúde",
+    responses(
+        (status = 200, description = "Pronto para receber tráfego", body = crate::openapi::Health),
+        (status = 503, description = "Banco `control` indisponível", body = crate::openapi::Problem, content_type = "application/problem+json"),
+    ))]
+pub(crate) async fn ready(State(st): State<AppState>) -> Response {
     let ok = tokio::time::timeout(Duration::from_secs(1), sqlx::query("SELECT 1").execute(&st.control))
         .await
         .is_ok_and(|r| r.is_ok());

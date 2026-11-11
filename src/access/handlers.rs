@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgConnection;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::catalog::{Feature, FeatureSet};
@@ -20,6 +21,7 @@ use super::repository::{self as repo, NewOverride, OverrideOut, ProfileOut, Prof
 use super::resolver;
 use crate::auth::middleware::Tenant;
 use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult};
+use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 use crate::tenancy::middleware::TenantCtx;
 use crate::users::handlers::ListQuery;
@@ -28,16 +30,27 @@ use crate::users::repository as users_repo;
 
 const MAX_ITEMS: usize = 100;
 
+/// Catálogo de módulos e features (somente leitura).
+#[utoipa::path(get, path = "/v1/modules", tag = "acesso",
+    responses((status = 200, description = "Módulos com suas features", body = Vec<repo::ModuleOut>)))]
 pub async fn modules(Tenant(ctx): Tenant) -> AppResult<Json<Vec<repo::ModuleOut>>> {
     Ok(Json(repo::modules(ctx.db()).await?))
 }
 
+/// Lista os perfis do tenant.
+#[utoipa::path(get, path = "/v1/profiles", tag = "acesso: perfis",
+    params(ListQuery),
+    responses((status = 200, description = "Página de perfis", body = Page<ProfileOut>)))]
 pub async fn list_profiles(Tenant(ctx): Tenant, ApiQuery(q): ApiQuery<ListQuery>) -> AppResult<Json<Page<ProfileOut>>> {
     let limit = page_limit(q.limit)?;
     let items = repo::list_profiles(ctx.db(), q.after.unwrap_or(Uuid::nil()), limit).await?;
     Ok(Json(page(items, limit, |p| p.id)))
 }
 
+/// Busca um perfil pelo id.
+#[utoipa::path(get, path = "/v1/profiles/{id}", tag = "acesso: perfis",
+    params(("id" = Uuid, Path, description = "Id do perfil")),
+    responses((status = 200, description = "Perfil", body = ProfileOut)))]
 pub async fn get_profile(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> AppResult<Json<ProfileOut>> {
     repo::get_profile(ctx.db(), id)
         .await?
@@ -74,15 +87,23 @@ fn validate_description(v: &mut Validator, d: &str) {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateProfile {
     pub name: String,
     pub description: Option<String>,
+    /// Códigos de features (veja `GET /v1/modules`).
     #[serde(default)]
     pub features: Vec<String>,
 }
 
+/// Cria um perfil. Só é possível incluir features que o próprio usuário tem.
+#[utoipa::path(post, path = "/v1/profiles", tag = "acesso: perfis",
+    request_body = CreateProfile,
+    responses(
+        (status = 201, description = "Perfil criado", body = ProfileOut),
+        (status = 409, description = "Nome de perfil já usado", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn create_profile(
     Tenant(ctx): Tenant,
     ApiJson(b): ApiJson<CreateProfile>,
@@ -125,13 +146,21 @@ fn name_conflict(e: sqlx::Error) -> AppError {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchProfile {
     pub name: Option<String>,
     pub description: Option<String>,
 }
 
+/// Altera nome ou descrição de um perfil.
+#[utoipa::path(patch, path = "/v1/profiles/{id}", tag = "acesso: perfis",
+    params(("id" = Uuid, Path, description = "Id do perfil")),
+    request_body = PatchProfile,
+    responses(
+        (status = 200, description = "Perfil atualizado", body = ProfileOut),
+        (status = 409, description = "Nome de perfil já usado", body = Problem, content_type = "application/problem+json"),
+    ))]
 pub async fn patch_profile(
     Tenant(ctx): Tenant,
     ApiPath(id): ApiPath<Uuid>,
@@ -167,6 +196,10 @@ pub async fn patch_profile(
     Ok(Json(out))
 }
 
+/// Remove um perfil (os usuários perdem as features dele).
+#[utoipa::path(delete, path = "/v1/profiles/{id}", tag = "acesso: perfis",
+    params(("id" = Uuid, Path, description = "Id do perfil")),
+    responses((status = 204, description = "Perfil removido")))]
 pub async fn delete_profile(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,
@@ -182,12 +215,19 @@ pub async fn delete_profile(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PutFeatures {
     pub features: Vec<String>,
 }
 
+/// Substitui as features de um perfil.
+///
+/// Só é possível conceder features que o próprio usuário tem.
+#[utoipa::path(put, path = "/v1/profiles/{id}/features", tag = "acesso: perfis",
+    params(("id" = Uuid, Path, description = "Id do perfil")),
+    request_body = PutFeatures,
+    responses((status = 200, description = "Perfil atualizado", body = ProfileOut)))]
 pub async fn put_profile_features(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,
@@ -233,16 +273,22 @@ async fn guard_manage_user(ctx: &TenantCtx, conn: &mut PgConnection, target: Uui
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct UserAccess {
     pub user_id: Uuid,
     pub is_tenant_admin: bool,
     pub is_active: bool,
     pub profiles: Vec<ProfileRef>,
     pub overrides: Vec<OverrideOut>,
+    /// Resultado final: (perfis + allows) - denys. Admins recebem todas.
+    #[schema(value_type = Vec<String>)]
     pub effective_features: Vec<&'static str>,
 }
 
+/// Perfis, exceções e features efetivas de um usuário.
+#[utoipa::path(get, path = "/v1/users/{id}/access", tag = "acesso: usuários",
+    params(("id" = Uuid, Path, description = "Id do usuário")),
+    responses((status = 200, description = "Acesso do usuário", body = UserAccess)))]
 pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> AppResult<Json<UserAccess>> {
     let user = users_repo::get(ctx.db(), id).await?.ok_or(AppError::NotFound)?;
     let (profiles, overrides, features) = tokio::try_join!(
@@ -267,12 +313,19 @@ pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> App
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PutProfiles {
     pub profile_ids: Vec<Uuid>,
 }
 
+/// Substitui os perfis de um usuário.
+///
+/// Ninguém altera o próprio acesso; admins só são alterados por usuários de plataforma.
+#[utoipa::path(put, path = "/v1/users/{id}/profiles", tag = "acesso: usuários",
+    params(("id" = Uuid, Path, description = "Id do usuário")),
+    request_body = PutProfiles,
+    responses((status = 200, description = "Perfis atuais do usuário", body = Vec<ProfileRef>)))]
 pub async fn put_user_profiles(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,
@@ -321,15 +374,26 @@ pub async fn put_user_profiles(
     Ok(Json(out))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PutOverride {
+    /// `allow` ou `deny`.
+    #[schema(example = "deny")]
     pub effect: String,
+    /// Motivo (1 a 500 caracteres), gravado na auditoria.
     pub reason: String,
+    /// Opcional; precisa estar no futuro.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
 }
 
+/// Cria ou substitui uma exceção (allow/deny) de uma feature para o usuário.
+///
+/// Deny sempre vence perfis e allows. Conceder (allow) exige ter a feature.
+#[utoipa::path(put, path = "/v1/users/{id}/overrides/{feature_code}", tag = "acesso: usuários",
+    params(("id" = Uuid, Path, description = "Id do usuário"), ("feature_code" = String, Path, description = "Código da feature, por exemplo `users.read`")),
+    request_body = PutOverride,
+    responses((status = 200, description = "Exceção gravada", body = OverrideOut)))]
 pub async fn put_override(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,
@@ -386,6 +450,10 @@ pub async fn put_override(
     Ok(Json(out))
 }
 
+/// Remove a exceção de uma feature para o usuário.
+#[utoipa::path(delete, path = "/v1/users/{id}/overrides/{feature_code}", tag = "acesso: usuários",
+    params(("id" = Uuid, Path, description = "Id do usuário"), ("feature_code" = String, Path, description = "Código da feature, por exemplo `users.read`")),
+    responses((status = 204, description = "Exceção removida")))]
 pub async fn delete_override(
     State(st): State<AppState>,
     Tenant(ctx): Tenant,
