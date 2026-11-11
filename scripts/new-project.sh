@@ -74,6 +74,9 @@ find . -type f ! -path './.git/*' ! -path './target/*' -print0 |
     fi
   done
 
+# O nome novo muda a ordem dos imports e o comprimento das linhas.
+if command -v cargo >/dev/null; then cargo fmt; else echo "Aviso: cargo não encontrado; rode cargo fmt depois." >&2; fi
+
 echo "==> Gerando README.md"
 cat > README.md <<EOF
 # $NAME
