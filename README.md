@@ -183,6 +183,7 @@ There is no `DATABASE_URL`: connections are built per database (`control` or `te
 | `API_PORT` | port published on the host by Compose | 8080 |
 | `METRICS_BIND`, `WORKER_METRICS_BIND` | `/metrics` on an internal port (not published by default) | `127.0.0.1:9090` / `:9091` |
 | `API_DOCS` | serves Swagger UI at `/docs` and the specification at `/openapi.json` | `false` |
+| `AUTH_COOKIE_SECURE` | `Secure` attribute of the refresh cookie (turn off only for plain HTTP outside `localhost`) | `true` |
 | `JWT_PLATFORM_SECRET`, `JWT_TENANT_SECRET` | distinct secrets, ≥ 32 bytes | — |
 | `JWT_ISSUER` | token `iss` | `simple-core` |
 | `API_INSTANCES`, `MAX_OPEN_TENANT_POOLS`, `TENANT_POOL_MAX_CONNECTIONS`, `CONTROL_POOL_MAX_CONNECTIONS`, `PG_CONNECTION_RESERVE` | connection budget (below) | 1 / 50 / 10 / 10 / 10 |
@@ -340,6 +341,10 @@ owner route and 403 for a tenant token on a platform route.
   (`simple-core:platform`) and tenants (`simple-core:tenant`). No role or permissions in the token.
 - Opaque 256-bit refresh tokens, stored as SHA-256, 30 days, rotated on every use; reusing a revoked token revokes
   all of the user's sessions. Changing the password or deactivating the user also revokes the sessions.
+- Browser clients send `X-Auth-Mode: cookie`: login and refresh put the refresh token in an `HttpOnly; Secure;
+  SameSite=Strict` cookie (`sc_platform_rt` on `/v1/platform/auth`, `sc_tenant_rt` on `/v1/auth`) instead of the body,
+  and refresh and logout read it from there. The required header also blocks CSRF (no CORS is enabled). One tenant
+  session per browser: logging into another tenant replaces the cookie.
 - Logins: the same 401 for a nonexistent tenant, nonexistent e-mail, wrong password and inactive account, always
   running Argon2id (with a dummy hash when there is no user).
 - Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429.
@@ -396,6 +401,8 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
   access to B (including with another `X-Tenant-Slug` and refresh); an admin is restricted to their own tenant; fast
   suspension and reactivation on both instances; `app_runtime` has no DDL, no `CREATE DATABASE`, can't change
   `db_name`/`role`/audit logs and has no `TEMP`; database ACL without `PUBLIC`.
+- **Refresh cookie** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` sets `HttpOnly`/`SameSite=Strict` cookies and hides
+  the token from the body; rotation, reuse, logout and clearing the cookie; the cookie is ignored without the header.
 - **Access** (`tests/access.rs`): CRUD with 404/409/422/413 and concurrent duplicate e-mails; keyset pagination;
   permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored;
   inactive/401/403; self-service name and password; invalidation across two instances affecting only the right

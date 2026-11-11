@@ -6,13 +6,15 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use super::cookie::{self, Kind, RefreshInput, cookie_mode};
 use super::middleware::{Platform, Tenant};
 use super::ratelimit::Scope;
 use super::{ClientIp, new_refresh_token, sha256};
@@ -44,7 +46,9 @@ pub struct TokenResp {
     pub token_type: &'static str,
     /// Validade do access token, em segundos.
     pub expires_in: i64,
-    pub refresh_token: String,
+    /// Omitido com `X-Auth-Mode: cookie`: o token vai no cookie `HttpOnly`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 fn refresh_expiry(st: &AppState) -> OffsetDateTime {
@@ -74,7 +78,10 @@ async fn login_tenant(st: &AppState, slug: &str) -> AppResult<Option<std::sync::
 ///
 /// Credenciais inválidas, tenant inexistente e conta inativa respondem o mesmo 401.
 #[utoipa::path(post, path = "/v1/auth/login", tag = "autenticação",
-    params(("X-Tenant-Slug" = String, Header, description = "Slug do tenant")),
+    params(
+        ("X-Tenant-Slug" = String, Header, description = "Slug do tenant"),
+        ("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: grava o refresh token no cookie `HttpOnly` `sc_tenant_rt` e o omite do corpo"),
+    ),
     request_body = LoginReq,
     responses(
         (status = 200, description = "Tokens emitidos", body = TokenResp),
@@ -88,7 +95,7 @@ pub async fn tenant_login(
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
     ApiJson(b): ApiJson<LoginReq>,
-) -> AppResult<Json<TokenResp>> {
+) -> AppResult<Response> {
     let slug = tenant_slug(&headers)?;
     let email = login_email(&b.email);
     st.limiter.check(Scope::Tenant(slug), ip, &email).await?;
@@ -111,12 +118,14 @@ pub async fn tenant_login(
         _ => return Err(AppError::Unauthorized),
     };
     let refresh = insert_tenant_refresh(&st, &pool.pool, id).await?;
-    Ok(Json(TokenResp {
-        access_token: st.jwt.issue_tenant(id, tenant.id)?,
-        token_type: "Bearer",
-        expires_in: st.jwt.ttl_secs(),
-        refresh_token: refresh,
-    }))
+    let access = st.jwt.issue_tenant(id, tenant.id)?;
+    Ok(cookie::tokens(
+        &st,
+        Kind::Tenant,
+        cookie_mode(&headers),
+        access,
+        refresh,
+    ))
 }
 
 async fn insert_tenant_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exec: E, user: Uuid) -> AppResult<String> {
@@ -137,23 +146,35 @@ async fn insert_tenant_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exec:
 ///
 /// O refresh token usado é revogado. Reusar um token já revogado encerra
 /// todas as sessões do usuário.
+///
+/// Com `X-Auth-Mode: cookie`, o token vem do cookie `sc_tenant_rt` (o corpo é
+/// ignorado), o novo token volta no cookie e um 401 apaga o cookie.
 #[utoipa::path(post, path = "/v1/auth/refresh", tag = "autenticação",
-    params(("X-Tenant-Slug" = String, Header, description = "Slug do tenant")),
-    request_body = RefreshReq,
+    params(
+        ("X-Tenant-Slug" = String, Header, description = "Slug do tenant"),
+        ("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: lê e grava o refresh token no cookie `HttpOnly` `sc_tenant_rt`"),
+    ),
+    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses(
         (status = 200, description = "Tokens emitidos", body = TokenResp),
         (status = 401, description = "Refresh token inválido, expirado ou revogado", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Tenant suspenso", body = Problem, content_type = "application/problem+json"),
     ))]
-pub async fn tenant_refresh(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    ApiJson(b): ApiJson<RefreshReq>,
-) -> AppResult<Json<TokenResp>> {
-    let slug = tenant_slug(&headers)?;
-    let tenant = login_tenant(&st, slug).await?.ok_or(AppError::Unauthorized)?;
+pub async fn tenant_refresh(State(st): State<AppState>, headers: HeaderMap, input: RefreshInput) -> Response {
+    let cookie = input.is_cookie();
+    match tenant_rotate(&st, &headers, input.token(Kind::Tenant)).await {
+        Ok((access, refresh)) => cookie::tokens(&st, Kind::Tenant, cookie, access, refresh),
+        Err(e) => cookie::refresh_error(&st, Kind::Tenant, cookie, e),
+    }
+}
+
+/// Rotaciona o refresh token de tenant; devolve (access, refresh).
+async fn tenant_rotate(st: &AppState, headers: &HeaderMap, token: Option<String>) -> AppResult<(String, String)> {
+    let slug = tenant_slug(headers)?;
+    let token = token.ok_or(AppError::Unauthorized)?;
+    let tenant = login_tenant(st, slug).await?.ok_or(AppError::Unauthorized)?;
     let pool = st.pools.get(&tenant).await?;
-    let hash = sha256(&b.refresh_token);
+    let hash = sha256(&token);
     let mut tx = pool.pool.begin().await?;
     let rotated = sqlx::query_scalar!(
         "UPDATE refresh_tokens rt SET revoked_at = now()
@@ -186,30 +207,35 @@ pub async fn tenant_refresh(
         }
         return Err(AppError::Unauthorized);
     };
-    let refresh = insert_tenant_refresh(&st, &mut *tx, user).await?;
+    let refresh = insert_tenant_refresh(st, &mut *tx, user).await?;
     tx.commit().await?;
-    Ok(Json(TokenResp {
-        access_token: st.jwt.issue_tenant(user, tenant.id)?,
-        token_type: "Bearer",
-        expires_in: st.jwt.ttl_secs(),
-        refresh_token: refresh,
-    }))
+    Ok((st.jwt.issue_tenant(user, tenant.id)?, refresh))
 }
 
 /// Revoga um refresh token do usuário logado.
+///
+/// Com `X-Auth-Mode: cookie`, revoga o token do cookie `sc_tenant_rt` (se
+/// houver) e apaga o cookie.
 #[utoipa::path(post, path = "/v1/auth/logout", tag = "autenticação",
-    request_body = RefreshReq,
+    params(("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: usa e apaga o cookie `sc_tenant_rt`")),
+    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses((status = 204, description = "Refresh token revogado")))]
-pub async fn tenant_logout(Tenant(ctx): Tenant, ApiJson(b): ApiJson<RefreshReq>) -> AppResult<StatusCode> {
-    sqlx::query!(
-        "UPDATE refresh_tokens SET revoked_at = now()
+pub async fn tenant_logout(
+    State(st): State<AppState>,
+    Tenant(ctx): Tenant,
+    input: RefreshInput,
+) -> AppResult<Response> {
+    if let Some(token) = input.token(Kind::Tenant) {
+        sqlx::query!(
+            "UPDATE refresh_tokens SET revoked_at = now()
          WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL",
-        sha256(&b.refresh_token),
-        ctx.actor_id()
-    )
-    .execute(ctx.db())
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
+            sha256(&token),
+            ctx.actor_id()
+        )
+        .execute(ctx.db())
+        .await?;
+    }
+    Ok(cookie::logged_out(&st, Kind::Tenant, input.is_cookie()))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -262,6 +288,7 @@ pub async fn tenant_me(Tenant(ctx): Tenant) -> AppResult<Json<MeResp>> {
 
 /// Login de usuário de plataforma (owner ou superusuário).
 #[utoipa::path(post, path = "/v1/platform/auth/login", tag = "plataforma: autenticação",
+    params(("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: grava o refresh token no cookie `HttpOnly` `sc_platform_rt` e o omite do corpo")),
     request_body = LoginReq,
     responses(
         (status = 200, description = "Tokens emitidos", body = TokenResp),
@@ -271,8 +298,9 @@ pub async fn tenant_me(Tenant(ctx): Tenant) -> AppResult<Json<MeResp>> {
 pub async fn platform_login(
     State(st): State<AppState>,
     ClientIp(ip): ClientIp,
+    headers: HeaderMap,
     ApiJson(b): ApiJson<LoginReq>,
-) -> AppResult<Json<TokenResp>> {
+) -> AppResult<Response> {
     let email = login_email(&b.email);
     st.limiter.check(Scope::Platform, ip, &email).await?;
     let row = sqlx::query!(
@@ -291,12 +319,14 @@ pub async fn platform_login(
         _ => return Err(AppError::Unauthorized),
     };
     let refresh = insert_platform_refresh(&st, &st.control, id).await?;
-    Ok(Json(TokenResp {
-        access_token: st.jwt.issue_platform(id)?,
-        token_type: "Bearer",
-        expires_in: st.jwt.ttl_secs(),
-        refresh_token: refresh,
-    }))
+    let access = st.jwt.issue_platform(id)?;
+    Ok(cookie::tokens(
+        &st,
+        Kind::Platform,
+        cookie_mode(&headers),
+        access,
+        refresh,
+    ))
 }
 
 async fn insert_platform_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exec: E, user: Uuid) -> AppResult<String> {
@@ -316,17 +346,28 @@ async fn insert_platform_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exe
 /// Troca um refresh token de plataforma por um novo par de tokens.
 ///
 /// Reusar um token já revogado encerra todas as sessões do usuário.
+///
+/// Com `X-Auth-Mode: cookie`, o token vem do cookie `sc_platform_rt` (o corpo
+/// é ignorado), o novo token volta no cookie e um 401 apaga o cookie.
 #[utoipa::path(post, path = "/v1/platform/auth/refresh", tag = "plataforma: autenticação",
-    request_body = RefreshReq,
+    params(("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: lê e grava o refresh token no cookie `HttpOnly` `sc_platform_rt`")),
+    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses(
         (status = 200, description = "Tokens emitidos", body = TokenResp),
         (status = 401, description = "Refresh token inválido, expirado ou revogado", body = Problem, content_type = "application/problem+json"),
     ))]
-pub async fn platform_refresh(
-    State(st): State<AppState>,
-    ApiJson(b): ApiJson<RefreshReq>,
-) -> AppResult<Json<TokenResp>> {
-    let hash = sha256(&b.refresh_token);
+pub async fn platform_refresh(State(st): State<AppState>, input: RefreshInput) -> Response {
+    let cookie = input.is_cookie();
+    match platform_rotate(&st, input.token(Kind::Platform)).await {
+        Ok((access, refresh)) => cookie::tokens(&st, Kind::Platform, cookie, access, refresh),
+        Err(e) => cookie::refresh_error(&st, Kind::Platform, cookie, e),
+    }
+}
+
+/// Rotaciona o refresh token de plataforma; devolve (access, refresh).
+async fn platform_rotate(st: &AppState, token: Option<String>) -> AppResult<(String, String)> {
+    let token = token.ok_or(AppError::Unauthorized)?;
+    let hash = sha256(&token);
     let control: &PgPool = &st.control;
     let mut tx = control.begin().await?;
     let rotated = sqlx::query_scalar!(
@@ -359,32 +400,33 @@ pub async fn platform_refresh(
         }
         return Err(AppError::Unauthorized);
     };
-    let refresh = insert_platform_refresh(&st, &mut *tx, user).await?;
+    let refresh = insert_platform_refresh(st, &mut *tx, user).await?;
     tx.commit().await?;
-    Ok(Json(TokenResp {
-        access_token: st.jwt.issue_platform(user)?,
-        token_type: "Bearer",
-        expires_in: st.jwt.ttl_secs(),
-        refresh_token: refresh,
-    }))
+    Ok((st.jwt.issue_platform(user)?, refresh))
 }
 
 /// Revoga um refresh token do usuário de plataforma logado.
+///
+/// Com `X-Auth-Mode: cookie`, revoga o token do cookie `sc_platform_rt` (se
+/// houver) e apaga o cookie.
 #[utoipa::path(post, path = "/v1/platform/auth/logout", tag = "plataforma: autenticação",
-    request_body = RefreshReq,
+    params(("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: usa e apaga o cookie `sc_platform_rt`")),
+    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses((status = 204, description = "Refresh token revogado")))]
 pub async fn platform_logout(
     State(st): State<AppState>,
     Platform(actor): Platform,
-    ApiJson(b): ApiJson<RefreshReq>,
-) -> AppResult<StatusCode> {
-    sqlx::query!(
-        "UPDATE platform_refresh_tokens SET revoked_at = now()
+    input: RefreshInput,
+) -> AppResult<Response> {
+    if let Some(token) = input.token(Kind::Platform) {
+        sqlx::query!(
+            "UPDATE platform_refresh_tokens SET revoked_at = now()
          WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL",
-        sha256(&b.refresh_token),
-        actor.id
-    )
-    .execute(&st.control)
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
+            sha256(&token),
+            actor.id
+        )
+        .execute(&st.control)
+        .await?;
+    }
+    Ok(cookie::logged_out(&st, Kind::Platform, input.is_cookie()))
 }

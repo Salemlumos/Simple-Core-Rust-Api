@@ -184,6 +184,7 @@ Não existe `DATABASE_URL`: as conexões são montadas por banco (`control` ou `
 | `API_PORT` | porta publicada no host pelo Compose | 8080 |
 | `METRICS_BIND`, `WORKER_METRICS_BIND` | `/metrics` em porta interna (não publicada por padrão) | `127.0.0.1:9090` / `:9091` |
 | `API_DOCS` | serve Swagger UI em `/docs` e a especificação em `/openapi.json` | `false` |
+| `AUTH_COOKIE_SECURE` | atributo `Secure` do cookie de refresh (desligue só para HTTP sem TLS fora de `localhost`) | `true` |
 | `JWT_PLATFORM_SECRET`, `JWT_TENANT_SECRET` | segredos distintos, ≥ 32 bytes | — |
 | `JWT_ISSUER` | `iss` dos tokens | `simple-core` |
 | `API_INSTANCES`, `MAX_OPEN_TENANT_POOLS`, `TENANT_POOL_MAX_CONNECTIONS`, `CONTROL_POOL_MAX_CONNECTIONS`, `PG_CONNECTION_RESERVE` | orçamento de conexões (abaixo) | 1 / 50 / 10 / 10 / 10 |
@@ -335,6 +336,10 @@ tenant em rota de plataforma.
   plataforma (`simple-core:platform`) e tenant (`simple-core:tenant`). Sem papel nem permissões no token.
 - Refresh tokens opacos de 256 bits, guardados como SHA-256, 30 dias, rotacionados a cada uso; reuso de token revogado
   revoga todas as sessões do usuário. Troca de senha e desativação também revogam as sessões.
+- Clientes de navegador enviam `X-Auth-Mode: cookie`: login e refresh gravam o refresh token em um cookie `HttpOnly;
+  Secure; SameSite=Strict` (`sc_platform_rt` em `/v1/platform/auth`, `sc_tenant_rt` em `/v1/auth`) em vez do corpo, e
+  refresh e logout o leem de lá. O header obrigatório também bloqueia CSRF (a API não libera CORS). Uma sessão de
+  tenant por navegador: logar em outro tenant substitui o cookie.
 - Logins: mesmo 401 para tenant inexistente, e-mail inexistente, senha errada e conta inativa, sempre executando
   Argon2id (hash fictício quando não há usuário).
 - Rate limit de login por escopo (plataforma ou tenant), IP e e-mail, em janela fixa (`moka` com TTL) → 429.
@@ -390,6 +395,8 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
   B (inclusive com outro `X-Tenant-Slug` e refresh); admin restrito ao próprio tenant; suspensão rápida e reativação
   nas duas instâncias; `app_runtime` sem DDL, `CREATE DATABASE`, alteração de `db_name`/`role`/auditorias e sem `TEMP`;
   ACL do banco sem `PUBLIC`.
+- **Cookie de refresh** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` grava cookies `HttpOnly`/`SameSite=Strict` e
+  tira o token do corpo; rotação, reuso, logout e limpeza do cookie; sem o header, o cookie é ignorado.
 - **Acesso** (`tests/access.rs`): CRUD com 404/409/422/413 e e-mails duplicados concorrentes; paginação keyset;
   permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; inativo/401/403;
   autoatendimento de nome e senha; invalidação entre duas instâncias afetando só o tenant certo; proteções contra
