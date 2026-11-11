@@ -135,6 +135,9 @@ Com `API_DOCS=true`, a API serve:
 O padrão é `false`: em produção nada disso é exposto e as rotas respondem 404. Os modelos `.env.docker.example` e
 `.env.local.example` ligam a opção; o `.env.external.example` a deixa desligada.
 
+Para obter a especificação sem subir a API nem o banco (por exemplo, para gerar um cliente), use `make openapi`
+(grava `openapi.json`; mude o caminho com `OPENAPI_OUT=...`) ou `api openapi > openapi.json`.
+
 **Testar pelo Swagger UI:**
 
 1. Abra `http://localhost:8080/docs`.
@@ -407,8 +410,8 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
   erro; remoção de pool do cache com consulta em andamento e LRU com capacidade 2; bootstrap idempotente e modo de
   validação.
 - **Documentação** (`tests/docs.rs` e `src/openapi.rs`): `/docs` e `/openapi.json` só existem com `API_DOCS=true` e
-  não liberam as rotas da API; a especificação cobre exatamente as rotas do roteador, com segurança e parâmetros
-  coerentes com o `Access` de cada uma.
+  não liberam as rotas da API; `api openapi` imprime a mesma especificação servida; a especificação cobre exatamente
+  as rotas do roteador, com segurança e parâmetros coerentes com o `Access` de cada uma.
 
 ---
 

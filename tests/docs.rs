@@ -5,6 +5,29 @@ mod common;
 use axum::http::StatusCode;
 use common::*;
 
+/// `api openapi` imprime a especificação sem banco nem variáveis de ambiente,
+/// idêntica à servida em `/openapi.json` (usada para gerar o cliente do front).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cli_prints_the_same_spec_that_is_served() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_api"))
+        .arg("openapi")
+        .env_clear()
+        .output()
+        .expect("executa api openapi");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout é só o JSON");
+
+    let w = World::new().await;
+    let mut cfg = w.env.api_config();
+    cfg.api_docs = true;
+    let app = w.env.app_with(cfg).await;
+    let served = app.get("/openapi.json", NONE).await;
+    assert_eq!(served.status, StatusCode::OK);
+    assert_eq!(printed, served.body);
+    drop(app);
+    w.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn docs_are_served_only_when_enabled() {
     let w = World::new().await;

@@ -18,8 +18,9 @@ WITH_ENV = bash scripts/with-env.sh $(ENV_FILE)
 up down logs reset load-populate load load-scenario: ENV_FILE ?= .env.docker
 up-external: ENV_FILE ?= .env.external
 db-up dev-init dev-api dev-worker sqlx-prepare sqlx-check test: ENV_FILE ?= .env.local
+OPENAPI_OUT ?= openapi.json
 
-.PHONY: help
+.PHONY: help openapi
 help:
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | sort
 
@@ -71,6 +72,9 @@ dev-worker: check-env ## api worker na máquina local
 	$(WITH_ENV) cargo run --release --locked -- worker
 
 # ------------------------------------------------------------------ qualidade
+
+openapi: ## Grava a especificação OpenAPI em OPENAPI_OUT (padrão openapi.json; sem banco nem env-file)
+	cargo run --release --locked -q -- openapi > $(OPENAPI_OUT)
 
 sqlx-prepare: check-env ## Regenera .sqlx (banco temporário sqlx_check com os dois schemas)
 	ENV_FILE=$(ENV_FILE) bash scripts/sqlx.sh prepare

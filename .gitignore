@@ -9,3 +9,6 @@
 !/load/results/.gitkeep
 /load/data/*
 !/load/data/.gitkeep
+
+# Gerado por make openapi.
+/openapi.json

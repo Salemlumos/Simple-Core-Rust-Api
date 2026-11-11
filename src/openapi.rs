@@ -132,6 +132,11 @@ pub struct Health {
 )]
 pub struct ApiDoc;
 
+/// Especificação em JSON formatado (`api openapi`), a mesma servida em [`SPEC_PATH`].
+pub fn spec_json() -> anyhow::Result<String> {
+    Ok(ApiDoc::openapi().to_pretty_json()?)
+}
+
 /// Swagger UI em [`DOCS_PATH`] e a especificação em [`SPEC_PATH`].
 pub fn docs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     SwaggerUi::new(DOCS_PATH).url(SPEC_PATH, ApiDoc::openapi()).into()

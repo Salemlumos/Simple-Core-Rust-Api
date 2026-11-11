@@ -135,6 +135,9 @@ With `API_DOCS=true`, the API serves:
 The default is `false`: in production none of this is exposed and these paths return 404. The
 `.env.docker.example` and `.env.local.example` templates turn it on; `.env.external.example` leaves it off.
 
+To get the specification without running the API or a database (e.g. to generate a client), use
+`make openapi` (writes `openapi.json`; change the path with `OPENAPI_OUT=...`) or `api openapi > openapi.json`.
+
 **Trying it in Swagger UI:**
 
 1. Open `http://localhost:8080/docs`.
@@ -413,7 +416,8 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
   others and returning an error; evicting a pool from the cache with a query in flight and LRU with capacity 2;
   idempotent bootstrap and validation mode.
 - **Documentation** (`tests/docs.rs` and `src/openapi.rs`): `/docs` and `/openapi.json` only exist with
-  `API_DOCS=true` and don't open up API routes; the specification covers exactly the router's routes, with security
+  `API_DOCS=true` and don't open up API routes; `api openapi` prints the same specification that is served; the
+  specification covers exactly the router's routes, with security
   and parameters consistent with each route's `Access`.
 
 ---
