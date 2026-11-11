@@ -1,5 +1,7 @@
 # simple-core
 
+**Português** | [English](README.en.md)
+
 API REST multi-tenant de usuários com controle de acesso, focada em baixa latência e alto throughput.
 
 - Rust estável (1.99), Tokio, Axum 0.8, Tower
@@ -433,7 +435,7 @@ make load-scenario S=get_by_id RATE=15000                   # um cenário
 | RAM | 32 GB (VM do Docker: 16 GB, 16 vCPUs) |
 | SO | Windows 11 Pro + Docker Desktop 29.5 (WSL2) |
 | API | 4 vCPUs = 2 núcleos físicos com SMT (`cpuset 0-3`), limite 2 GB |
-| PostgreSQL 18 | 4 vCPUs = 2 núcleos físicos (`cpuset 4-7`), `shared_buffers=1GB`, `max_connections=300` |
+| PostgreSQL 18 | 4 vCPUs = 2 núcleos físicos (`cpuset 4-7`), `shared_buffers=1GB`, `max_connections=1150` |
 | k6 | 4 núcleos físicos (`cpuset 8-15`), na mesma rede bridge |
 
 Observação: "4 vCPUs" aqui são 2 núcleos físicos com SMT, e o Windows continua agendando trabalho do host nos mesmos
