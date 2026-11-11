@@ -23,6 +23,7 @@ Um único binário, `api`, com os comandos `bootstrap`, `migrate`, `seed`, `serv
 7. [Testes](#testes)
 8. [Testes de carga](#testes-de-carga)
 9. [Resultados](#resultados)
+10. [Licença](#licença)
 
 ---
 
@@ -521,3 +522,15 @@ considerável entre execuções idênticas nesta máquina (01 contra a repetiç�
 - Docker Desktop no Windows (VM WSL2): o host continua usando os mesmos núcleos, o que aumenta a variância.
 - "4 vCPUs" = 2 núcleos físicos com SMT, para a API e para o PostgreSQL.
 - k6 na mesma máquina, em núcleos separados, falando com a API pela rede bridge do Docker.
+
+---
+
+## Licença
+
+Licenciado, à sua escolha, sob qualquer uma das duas licenças:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+Salvo declaração explícita em contrário, qualquer contribuição enviada para inclusão neste projeto, conforme definido
+na licença Apache-2.0, será licenciada da mesma forma dupla, sem termos ou condições adicionais.

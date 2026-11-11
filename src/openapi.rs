@@ -143,8 +143,6 @@ struct AccessRules;
 
 impl Modify for AccessRules {
     fn modify(&self, api: &mut utoipa::openapi::OpenApi) {
-        // Sem licença declarada no Cargo.toml: não publica um objeto vazio.
-        api.info.license = None;
         let components = api.components.get_or_insert_with(Default::default);
         components.add_security_scheme(
             PLATFORM_TOKEN,

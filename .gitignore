@@ -1,9 +1,8 @@
 /target
+# Arquivos de ambiente reais (com segredos) nunca entram; só os modelos *.example.
 .env
-.env.docker
-.env.local
-.env.external
-.env.external2
+.env.*
+!.env.*.example
 /certs/*
 !/certs/.gitkeep
 /load/results/*
