@@ -167,6 +167,13 @@ To get the specification without running the API or a database (e.g. to generate
   middlewares, and its static files are embedded in the binary (`vendored` feature; the build downloads nothing).
   API routes don't run any new code.
 
+**Errors:** every error is `application/problem+json` (RFC 9457) with a stable `code` field. It is either the default
+for the status (`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) or a specific 403/409
+reason (`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; full list in
+`src/error.rs`). In a 422, each item of `errors` also has `field` and `code` (`required`, `invalid_email`,
+`invalid_length`...). Clients should branch and translate on `code`; `detail` and `message` are English text for
+humans and may change.
+
 ---
 
 ## Environment variables
@@ -404,6 +411,8 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
   access to B (including with another `X-Tenant-Slug` and refresh); an admin is restricted to their own tenant; fast
   suspension and reactivation on both instances; `app_runtime` has no DDL, no `CREATE DATABASE`, can't change
   `db_name`/`role`/audit logs and has no `TEMP`; database ACL without `PUBLIC`.
+- **Error codes** (`tests/errors.rs`): every Problem has a `code`; specific codes for 403/409 and per-field codes in 422,
+  documented in the specification.
 - **Refresh cookie** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` sets `HttpOnly`/`SameSite=Strict` cookies and hides
   the token from the body; rotation, reuse, logout and clearing the cookie; the cookie is ignored without the header.
 - **Access** (`tests/access.rs`): CRUD with 404/409/422/413 and concurrent duplicate e-mails; keyset pagination;

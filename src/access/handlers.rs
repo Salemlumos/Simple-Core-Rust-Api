@@ -20,7 +20,7 @@ use super::catalog::{Feature, FeatureSet};
 use super::repository::{self as repo, NewOverride, OverrideOut, ProfileOut, ProfileRef, audit};
 use super::resolver;
 use crate::auth::middleware::Tenant;
-use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult};
+use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, reason};
 use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 use crate::tenancy::middleware::TenantCtx;
@@ -61,12 +61,12 @@ pub async fn get_profile(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> App
 /// Valida códigos de feature contra o catálogo e devolve o conjunto.
 fn parse_features(codes: &[String]) -> AppResult<(Vec<String>, FeatureSet)> {
     if codes.len() > MAX_ITEMS {
-        return Err(AppError::invalid("features", "too many features"));
+        return Err(AppError::invalid("features", "too_many", "too many features"));
     }
     let mut set = FeatureSet::empty();
     let mut out = BTreeSet::new();
     for c in codes {
-        let f = Feature::from_code(c).ok_or(AppError::invalid("features", "unknown feature code"))?;
+        let f = Feature::from_code(c).ok_or(AppError::invalid("features", "unknown", "unknown feature code"))?;
         set.insert(f);
         out.insert(f.code().to_owned());
     }
@@ -77,13 +77,13 @@ fn ensure_grantable(ctx: &TenantCtx, set: FeatureSet) -> AppResult<()> {
     if set.is_subset_of(ctx.grantable()) {
         Ok(())
     } else {
-        Err(AppError::Forbidden("cannot grant features you do not have"))
+        Err(AppError::Forbidden(reason::CANNOT_GRANT))
     }
 }
 
 fn validate_description(v: &mut Validator, d: &str) {
     if d.chars().count() > 500 {
-        v.err("description", "must have at most 500 characters");
+        v.err("description", "too_long", "must have at most 500 characters");
     }
 }
 
@@ -140,7 +140,7 @@ pub async fn create_profile(
 
 fn name_conflict(e: sqlx::Error) -> AppError {
     if crate::db::is_unique_violation(&e) {
-        AppError::Conflict("profile name already in use")
+        AppError::Conflict(reason::PROFILE_NAME_TAKEN)
     } else {
         e.into()
     }
@@ -172,7 +172,7 @@ pub async fn patch_profile(
         validate_description(&mut v, d);
     }
     if b.name.is_none() && b.description.is_none() {
-        v.err("body", "no fields to update");
+        v.err("body", "no_changes", "no fields to update");
     }
     v.finish()?;
     let mut tx = ctx.db().begin().await?;
@@ -262,13 +262,13 @@ pub async fn put_profile_features(
 async fn guard_manage_user(ctx: &TenantCtx, conn: &mut PgConnection, target: Uuid) -> AppResult<()> {
     let is_self = !ctx.is_platform() && target == ctx.actor_id();
     if is_self && !ctx.full_access() {
-        return Err(AppError::Forbidden("cannot change your own access"));
+        return Err(AppError::Forbidden(reason::OWN_ACCESS));
     }
     let is_admin = users_repo::is_admin(&mut *conn, target)
         .await?
         .ok_or(AppError::NotFound)?;
     if is_admin && !ctx.is_platform() && !is_self {
-        return Err(AppError::Forbidden("only platform users can change a tenant admin"));
+        return Err(AppError::Forbidden(reason::ADMIN_CHANGE_PLATFORM_ONLY));
     }
     Ok(())
 }
@@ -333,7 +333,7 @@ pub async fn put_user_profiles(
     ApiJson(b): ApiJson<PutProfiles>,
 ) -> AppResult<Json<Vec<ProfileRef>>> {
     if b.profile_ids.len() > MAX_ITEMS {
-        return Err(AppError::invalid("profile_ids", "too many profiles"));
+        return Err(AppError::invalid("profile_ids", "too_many", "too many profiles"));
     }
     let ids: Vec<Uuid> = b
         .profile_ids
@@ -346,7 +346,7 @@ pub async fn put_user_profiles(
     guard_manage_user(&ctx, &mut tx, id).await?;
     let added = repo::replace_user_profiles(&mut tx, id, &ids).await.map_err(|e| {
         if crate::db::is_fk_violation(&e) {
-            AppError::invalid("profile_ids", "unknown profile")
+            AppError::invalid("profile_ids", "unknown", "unknown profile")
         } else {
             e.into()
         }
@@ -403,18 +403,18 @@ pub async fn put_override(
     let feature = Feature::from_code(&code).ok_or(AppError::NotFound)?;
     let mut v = Validator::default();
     if b.effect != "allow" && b.effect != "deny" {
-        v.err("effect", "must be allow or deny");
+        v.err("effect", "invalid_choice", "must be allow or deny");
     }
     let reason = b.reason.trim();
     if reason.is_empty() || reason.chars().count() > 500 {
-        v.err("reason", "required, at most 500 characters");
+        v.err("reason", "invalid_length", "required, at most 500 characters");
     }
     if b.expires_at.is_some_and(|e| e <= OffsetDateTime::now_utc()) {
-        v.err("expires_at", "must be in the future");
+        v.err("expires_at", "must_be_future", "must be in the future");
     }
     v.finish()?;
     if b.effect == "allow" && !ctx.grantable().contains(feature) {
-        return Err(AppError::Forbidden("cannot grant features you do not have"));
+        return Err(AppError::Forbidden(reason::CANNOT_GRANT));
     }
     let mut tx = ctx.db().begin().await?;
     guard_manage_user(&ctx, &mut tx, id).await?;
@@ -467,7 +467,7 @@ pub async fn delete_override(
         .ok_or(AppError::NotFound)?;
     // Remover um deny pode devolver a feature: equivale a concedê-la.
     if effect == "deny" && !ctx.grantable().contains(feature) {
-        return Err(AppError::Forbidden("cannot grant features you do not have"));
+        return Err(AppError::Forbidden(reason::CANNOT_GRANT));
     }
     audit(
         &mut tx,

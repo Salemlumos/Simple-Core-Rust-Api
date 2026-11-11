@@ -168,6 +168,13 @@ Para obter a especificação sem subir a API nem o banco (por exemplo, para gera
   autorização e de métricas, e os arquivos estáticos já vêm embutidos no binário (feature `vendored`; o build não
   baixa nada). As rotas da API não passam por nenhum código novo.
 
+**Erros:** todo erro é `application/problem+json` (RFC 9457) com um campo `code` estável. Ele é o padrão do status
+(`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) ou um motivo específico de 403/409
+(`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; lista completa em
+`src/error.rs`). No 422, cada item de `errors` também traz `field` e `code` (`required`, `invalid_email`,
+`invalid_length`...). Clientes devem decidir e traduzir pelo `code`; `detail` e `message` são texto em inglês para
+pessoas e podem mudar.
+
 ---
 
 ## Variáveis de ambiente
@@ -398,6 +405,8 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
   B (inclusive com outro `X-Tenant-Slug` e refresh); admin restrito ao próprio tenant; suspensão rápida e reativação
   nas duas instâncias; `app_runtime` sem DDL, `CREATE DATABASE`, alteração de `db_name`/`role`/auditorias e sem `TEMP`;
   ACL do banco sem `PUBLIC`.
+- **Códigos de erro** (`tests/errors.rs`): todo Problem tem `code`; códigos específicos em 403/409 e por campo no 422,
+  documentados na especificação.
 - **Cookie de refresh** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` grava cookies `HttpOnly`/`SameSite=Strict` e
   tira o token do corpo; rotação, reuso, logout e limpeza do cookie; sem o header, o cookie é ignorado.
 - **Acesso** (`tests/access.rs`): CRUD com 404/409/422/413 e e-mails duplicados concorrentes; paginação keyset;

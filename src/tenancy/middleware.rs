@@ -16,7 +16,7 @@ use super::registry::{TenantInfo, TenantStatus};
 use crate::access::catalog::{Feature, FeatureSet};
 use crate::access::resolver::{PlatformRole, Principal};
 use crate::auth::middleware::{bearer, platform_actor};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, reason};
 use crate::state::AppState;
 
 pub const TENANT_HEADER: &str = "x-tenant-slug";
@@ -95,8 +95,8 @@ fn header_slug(headers: &HeaderMap) -> AppResult<Option<&str>> {
 fn ensure_active(t: &TenantInfo) -> AppResult<()> {
     match t.status {
         TenantStatus::Active => Ok(()),
-        TenantStatus::Suspended => Err(AppError::Forbidden("tenant suspended")),
-        _ => Err(AppError::Forbidden("tenant not available")),
+        TenantStatus::Suspended => Err(AppError::Forbidden(reason::TENANT_SUSPENDED)),
+        _ => Err(AppError::Forbidden(reason::TENANT_UNAVAILABLE)),
     }
 }
 
@@ -113,7 +113,7 @@ pub async fn resolve_tenant_ctx(
         if let Some(slug) = slug
             && slug != tenant.slug
         {
-            return Err(AppError::Forbidden("X-Tenant-Slug does not match token"));
+            return Err(AppError::Forbidden(reason::TENANT_SLUG_MISMATCH));
         }
         ensure_active(&tenant)?;
         let pool = state.pools.get(&tenant).await?;
@@ -135,9 +135,9 @@ pub async fn resolve_tenant_ctx(
     // Não é token de tenant: só resta token de plataforma.
     let actor = platform_actor(state, headers).await?;
     if tenant_token_only {
-        return Err(AppError::Forbidden("tenant token required"));
+        return Err(AppError::Forbidden(reason::TENANT_TOKEN_REQUIRED));
     }
-    let slug = slug.ok_or(AppError::Forbidden("X-Tenant-Slug required for platform tokens"))?;
+    let slug = slug.ok_or(AppError::Forbidden(reason::TENANT_SLUG_REQUIRED))?;
     let tenant = state.registry.by_slug(slug).await?.ok_or(AppError::NotFound)?;
     ensure_active(&tenant)?;
     let pool = state.pools.get(&tenant).await?;

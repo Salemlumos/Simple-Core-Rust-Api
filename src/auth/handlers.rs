@@ -18,7 +18,7 @@ use super::cookie::{self, Kind, RefreshInput, cookie_mode};
 use super::middleware::{Platform, Tenant};
 use super::ratelimit::Scope;
 use super::{ClientIp, new_refresh_token, sha256};
-use crate::error::{ApiJson, AppError, AppResult};
+use crate::error::{ApiJson, AppError, AppResult, reason};
 use crate::openapi::Problem;
 use crate::state::AppState;
 use crate::tenancy::middleware::{Actor, TENANT_HEADER};
@@ -67,7 +67,7 @@ fn tenant_slug(headers: &HeaderMap) -> AppResult<&str> {
 async fn login_tenant(st: &AppState, slug: &str) -> AppResult<Option<std::sync::Arc<TenantInfo>>> {
     match st.registry.by_slug(slug).await? {
         Some(t) if t.status == TenantStatus::Active => Ok(Some(t)),
-        Some(t) if t.status == TenantStatus::Suspended => Err(AppError::Forbidden("tenant suspended")),
+        Some(t) if t.status == TenantStatus::Suspended => Err(AppError::Forbidden(reason::TENANT_SUSPENDED)),
         _ => Ok(None),
     }
 }
@@ -259,7 +259,7 @@ pub struct MeResp {
     responses((status = 200, description = "Usuário logado", body = MeResp)))]
 pub async fn tenant_me(Tenant(ctx): Tenant) -> AppResult<Json<MeResp>> {
     let Actor::Tenant { id, principal } = &ctx.actor else {
-        return Err(AppError::Forbidden("tenant token required"));
+        return Err(AppError::Forbidden(reason::TENANT_TOKEN_REQUIRED));
     };
     let user = sqlx::query_as!(
         UserOut,
