@@ -54,6 +54,11 @@ cd "$DEST"
 
 echo "==> Removendo o que é específico do simple-core"
 rm -rf load LICENSE-APACHE LICENSE-MIT README.pt-BR.md scripts/new-project.sh
+# Versionamento do zero: sem CHANGELOG e a primeira release do projeto novo será a 0.1.0.
+rm -f CHANGELOG.md
+printf '{\n  ".": "0.0.0"\n}\n' > .release-please-manifest.json
+perl -0pi -e 's/^version = "[^"]*"/version = "0.1.0"/m' Cargo.toml
+perl -0pi -e 's/(\nname = "simple-core"\nversion = )"[^"]*"/$1"0.1.0"/' Cargo.lock
 
 # Makefile: sem os alvos de carga.
 perl -0pi -e '
@@ -123,6 +128,13 @@ make fmt lint sqlx-check
 make sqlx-prepare         # after changing any sqlx::query! macro
 make help                 # every target
 \`\`\`
+
+## Releases
+
+Versioning is automatic ([release-please](https://github.com/googleapis/release-please)): write commits as
+Conventional Commits (\`feat:\`, \`fix:\`, \`perf:\`, \`docs:\`...). Every push to \`main\` opens or updates a release PR with
+the next version and the CHANGELOG; merging it creates the \`vX.Y.Z\` tag, the GitHub release and attaches the Linux
+binary. Enable *Settings → Actions → General → Allow GitHub Actions to create and approve pull requests*.
 
 ## Structure
 

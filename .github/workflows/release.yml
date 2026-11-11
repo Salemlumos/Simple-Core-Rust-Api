@@ -1,0 +1,69 @@
+# Versionamento e releases automáticos (release-please).
+#
+# A cada push na main, o release-please lê os commits (Conventional Commits) e
+# abre ou atualiza um PR "chore(main): release X.Y.Z" com a nova versão no
+# Cargo.toml/Cargo.lock e o CHANGELOG.md. Ao fazer merge desse PR, ele cria a
+# tag vX.Y.Z e a release no GitHub, e o job `binary` anexa o binário Linux.
+#
+#   feat: ...            -> versão minor (0.1.0 -> 0.2.0)
+#   fix: / perf: ...     -> versão patch (0.2.0 -> 0.2.1)
+#   feat!: / BREAKING CHANGE: -> minor enquanto < 1.0.0, depois major
+#   docs:, chore:, ci:, test:, refactor: -> não geram release sozinhos
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  binary:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      TARGET: x86_64-unknown-linux-gnu
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - name: Rust estável
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release
+        run: cargo build --release --locked
+      - name: Empacota
+        run: |
+          name="${GITHUB_REPOSITORY#*/}-${TAG}-${TARGET}"
+          mkdir -p "dist/$name"
+          cp target/release/api README.md "dist/$name/"
+          cp LICENSE-* "dist/$name/" 2>/dev/null || true
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+      - name: Anexa à release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 --clobber

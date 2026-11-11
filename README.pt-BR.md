@@ -25,8 +25,9 @@ Um único binário, `api`, com os comandos `bootstrap`, `migrate`, `seed`, `serv
 7. [Testes](#testes)
 8. [Testes de carga](#testes-de-carga)
 9. [Resultados](#resultados)
-10. [Iniciar um projeto novo a partir desta base](#iniciar-um-projeto-novo-a-partir-desta-base)
-11. [Licença](#licença)
+10. [Releases e versionamento](#releases-e-versionamento)
+11. [Iniciar um projeto novo a partir desta base](#iniciar-um-projeto-novo-a-partir-desta-base)
+12. [Licença](#licença)
 
 ---
 
@@ -528,6 +529,30 @@ considerável entre execuções idênticas nesta máquina (01 contra a repetiç�
 
 ---
 
+## Releases e versionamento
+
+O versionamento é automático, com o [release-please](https://github.com/googleapis/release-please)
+(`.github/workflows/release.yml`), a partir das mensagens de commit
+([Conventional Commits](https://www.conventionalcommits.org/pt-br/)):
+
+| Commit | Próxima versão (enquanto < 1.0.0) |
+|---|---|
+| `feat: ...` | minor: 0.1.0 → 0.2.0 |
+| `fix: ...`, `perf: ...` | patch: 0.2.0 → 0.2.1 |
+| `feat!: ...` ou rodapé `BREAKING CHANGE:` | minor (major depois da 1.0.0) |
+| `docs:`, `chore:`, `ci:`, `test:`, `refactor:` | sozinhos não geram release (`docs` aparece no changelog) |
+
+1. A cada push na `main`, abre ou atualiza um pull request chamado `chore(main): release X.Y.Z`. Ele sobe a versão no
+   `Cargo.toml`/`Cargo.lock` e atualiza o `CHANGELOG.md`.
+2. Ao fazer merge desse pull request, são criadas a tag `vX.Y.Z` e a release no GitHub, com as notas.
+3. Em seguida, o job `binary` compila o binário de release e anexa
+   `<repo>-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` (e o `.sha256`) à release.
+
+O repositório precisa da opção *Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create
+and approve pull requests* ligada.
+
+---
+
 ## Iniciar um projeto novo a partir desta base
 
 O `scripts/new-project.sh` gera uma cópia limpa e renomeada desta API para começar um sistema novo:
@@ -540,6 +565,8 @@ scripts/new-project.sh billing-api --check         # também compila e roda os t
 
 - **Mantém:** tudo o que funciona — autenticação, tenants, usuários, perfis e permissões, endpoints de plataforma,
   comandos da CLI, Swagger, migrations, Docker Compose, Makefile e todos os testes.
+- **Versionamento:** o workflow de releases vai junto; o projeto novo começa do zero (sem `CHANGELOG.md`, primeira
+  release 0.1.0).
 - **Remove:** os testes de carga (`load/`), os resultados e o histórico de desempenho, o README em português e os
   arquivos de licença (o projeto novo nasce sem licença).
 - **Renomeia:** `simple-core`/`simple_core` viram o nome novo em todos os lugares — pacote e crate, projeto e volume do

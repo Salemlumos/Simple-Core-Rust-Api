@@ -25,8 +25,9 @@ A single binary, `api`, with the commands `bootstrap`, `migrate`, `seed`, `serve
 7. [Tests](#tests)
 8. [Load tests](#load-tests)
 9. [Results](#results)
-10. [Starting a new project from this base](#starting-a-new-project-from-this-base)
-11. [License](#license)
+10. [Releases and versioning](#releases-and-versioning)
+11. [Starting a new project from this base](#starting-a-new-project-from-this-base)
+12. [License](#license)
 
 ---
 
@@ -536,6 +537,30 @@ considerable variance between identical runs on this machine (01 vs. its repeat)
 
 ---
 
+## Releases and versioning
+
+Versioning is automatic, with [release-please](https://github.com/googleapis/release-please)
+(`.github/workflows/release.yml`), based on the commit messages
+([Conventional Commits](https://www.conventionalcommits.org/)):
+
+| Commit | Next version (while < 1.0.0) |
+|---|---|
+| `feat: ...` | minor: 0.1.0 → 0.2.0 |
+| `fix: ...`, `perf: ...` | patch: 0.2.0 → 0.2.1 |
+| `feat!: ...` or a `BREAKING CHANGE:` footer | minor (major after 1.0.0) |
+| `docs:`, `chore:`, `ci:`, `test:`, `refactor:` | no release on their own (`docs` shows in the changelog) |
+
+1. Every push to `main` opens or updates a pull request named `chore(main): release X.Y.Z`. It bumps the version in
+   `Cargo.toml`/`Cargo.lock` and updates `CHANGELOG.md`.
+2. Merging that pull request creates the `vX.Y.Z` tag and the GitHub release with the release notes.
+3. The `binary` job then builds the release binary and attaches
+   `<repo>-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` (plus its `.sha256`) to the release.
+
+The repository needs *Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and
+approve pull requests* enabled.
+
+---
+
 ## Starting a new project from this base
 
 `scripts/new-project.sh` creates a clean, renamed copy of this API to start a new system:
@@ -548,6 +573,8 @@ scripts/new-project.sh billing-api --check         # also builds and runs the un
 
 - **Kept:** everything that works — authentication, tenants, users, profiles and permissions, platform endpoints,
   CLI commands, Swagger, migrations, Docker Compose, Makefile and all the tests.
+- **Versioning:** the release workflow is kept; the new project starts from scratch (no `CHANGELOG.md`, first
+  release 0.1.0).
 - **Removed:** the load tests (`load/`), the performance results and history, the Portuguese README and the license
   files (the new project starts without a license).
 - **Renamed:** `simple-core`/`simple_core` become the new name everywhere — package and crate, Compose project and
