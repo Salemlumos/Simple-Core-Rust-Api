@@ -25,7 +25,8 @@ Um único binário, `api`, com os comandos `bootstrap`, `migrate`, `seed`, `serv
 7. [Testes](#testes)
 8. [Testes de carga](#testes-de-carga)
 9. [Resultados](#resultados)
-10. [Licença](#licença)
+10. [Iniciar um projeto novo a partir desta base](#iniciar-um-projeto-novo-a-partir-desta-base)
+11. [Licença](#licença)
 
 ---
 
@@ -524,6 +525,30 @@ considerável entre execuções idênticas nesta máquina (01 contra a repetiç�
 - Docker Desktop no Windows (VM WSL2): o host continua usando os mesmos núcleos, o que aumenta a variância.
 - "4 vCPUs" = 2 núcleos físicos com SMT, para a API e para o PostgreSQL.
 - k6 na mesma máquina, em núcleos separados, falando com a API pela rede bridge do Docker.
+
+---
+
+## Iniciar um projeto novo a partir desta base
+
+O `scripts/new-project.sh` gera uma cópia limpa e renomeada desta API para começar um sistema novo:
+
+```bash
+scripts/new-project.sh billing-api                 # cria ../billing-api
+scripts/new-project.sh billing-api ~/code/billing  # destino personalizado
+scripts/new-project.sh billing-api --check         # também compila e roda os testes unitários
+```
+
+- **Mantém:** tudo o que funciona — autenticação, tenants, usuários, perfis e permissões, endpoints de plataforma,
+  comandos da CLI, Swagger, migrations, Docker Compose, Makefile e todos os testes.
+- **Remove:** os testes de carga (`load/`), os resultados e o histórico de desempenho, o README em português e os
+  arquivos de licença (o projeto novo nasce sem licença).
+- **Renomeia:** `simple-core`/`simple_core` viram o nome novo em todos os lugares — pacote e crate, projeto e volume do
+  Compose, imagem Docker, issuer e audiências do JWT e título do Swagger.
+- Gera um README curto e cria um repositório Git na branch `main` com um commit inicial, usando o
+  `user.name`/`user.email` deste repositório.
+
+A cópia parte do último commit (`HEAD`); alterações não commitadas não entram. Para rodar o projeto novo junto com
+este, mude `API_PORT` e `DB_PUBLISH_PORT` no `.env` dele.
 
 ---
 

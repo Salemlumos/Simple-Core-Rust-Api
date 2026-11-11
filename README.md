@@ -25,7 +25,8 @@ A single binary, `api`, with the commands `bootstrap`, `migrate`, `seed`, `serve
 7. [Tests](#tests)
 8. [Load tests](#load-tests)
 9. [Results](#results)
-10. [License](#license)
+10. [Starting a new project from this base](#starting-a-new-project-from-this-base)
+11. [License](#license)
 
 ---
 
@@ -532,6 +533,30 @@ considerable variance between identical runs on this machine (01 vs. its repeat)
 - Docker Desktop on Windows (WSL2 VM): the host keeps using the same cores, which increases variance.
 - "4 vCPUs" = 2 physical cores with SMT, for both the API and PostgreSQL.
 - k6 on the same machine, on separate cores, talking to the API over Docker's bridge network.
+
+---
+
+## Starting a new project from this base
+
+`scripts/new-project.sh` creates a clean, renamed copy of this API to start a new system:
+
+```bash
+scripts/new-project.sh billing-api                 # creates ../billing-api
+scripts/new-project.sh billing-api ~/code/billing  # custom destination
+scripts/new-project.sh billing-api --check         # also builds and runs the unit tests
+```
+
+- **Kept:** everything that works — authentication, tenants, users, profiles and permissions, platform endpoints,
+  CLI commands, Swagger, migrations, Docker Compose, Makefile and all the tests.
+- **Removed:** the load tests (`load/`), the performance results and history, the Portuguese README and the license
+  files (the new project starts without a license).
+- **Renamed:** `simple-core`/`simple_core` become the new name everywhere — package and crate, Compose project and
+  volume, Docker image, JWT issuer and audiences, and the Swagger title.
+- A short README is generated and a Git repository is created on `main` with one initial commit, using this
+  repository's `user.name`/`user.email`.
+
+The copy starts from the last commit (`HEAD`); uncommitted changes are not included. To run the new project next to
+this one, change `API_PORT` and `DB_PUBLISH_PORT` in its `.env` file.
 
 ---
 
