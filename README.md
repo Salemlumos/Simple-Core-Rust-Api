@@ -1,210 +1,210 @@
 # simple-core
 
-**Português** | [English](README.en.md)
+**English** | [Português](README.pt-BR.md)
 
-API REST multi-tenant de usuários com controle de acesso, focada em baixa latência e alto throughput.
+Multi-tenant user management REST API with access control, built for low latency and high throughput.
 
-- Rust estável (1.99), Tokio, Axum 0.8, Tower
-- PostgreSQL 18 com SQLx 0.9 (queries verificadas em compilação, modo offline com `.sqlx`)
-- `moka` (caches), `argon2` (Argon2id), `jsonwebtoken` (HS256), `tracing` (JSON não bloqueante), métricas Prometheus
-- OpenAPI 3.1 gerada do código (`utoipa`) com Swagger UI em `/docs`
-- Docker Compose (perfis `db` e `app`) e k6 para carga
+- Stable Rust (1.99), Tokio, Axum 0.8, Tower
+- PostgreSQL 18 with SQLx 0.9 (compile-time checked queries, offline mode with `.sqlx`)
+- `moka` (caches), `argon2` (Argon2id), `jsonwebtoken` (HS256), `tracing` (non-blocking JSON), Prometheus metrics
+- OpenAPI 3.1 generated from code (`utoipa`) with Swagger UI at `/docs`
+- Docker Compose (`db` and `app` profiles) and k6 for load testing
 
-Um único binário, `api`, com os comandos `bootstrap`, `migrate`, `seed`, `serve`, `worker` e `healthcheck`.
-
----
-
-## Sumário
-
-1. [Execução](#execução)
-2. [Documentação da API (Swagger)](#documentação-da-api-swagger)
-3. [Variáveis de ambiente](#variáveis-de-ambiente)
-4. [Banco gerenciado (DB_BOOTSTRAP=false)](#banco-gerenciado-db_bootstrapfalse)
-5. [Migrar do banco em container para um banco externo](#migrar-do-banco-em-container-para-um-banco-externo)
-6. [Arquitetura e decisões técnicas](#arquitetura-e-decisões-técnicas)
-7. [Testes](#testes)
-8. [Testes de carga](#testes-de-carga)
-9. [Resultados](#resultados)
-10. [Licença](#licença)
+A single binary, `api`, with the commands `bootstrap`, `migrate`, `seed`, `serve`, `worker` and `healthcheck`.
 
 ---
 
-## Execução
+## Contents
 
-Requisitos: Docker com **Compose 2.20 ou superior** (o Makefile verifica) e GNU make. Rust e PostgreSQL só são
-necessários nos modos locais.
+1. [Running](#running)
+2. [API documentation (Swagger)](#api-documentation-swagger)
+3. [Environment variables](#environment-variables)
+4. [Managed database (DB_BOOTSTRAP=false)](#managed-database-db_bootstrapfalse)
+5. [Moving from the container database to an external one](#moving-from-the-container-database-to-an-external-one)
+6. [Architecture and technical decisions](#architecture-and-technical-decisions)
+7. [Tests](#tests)
+8. [Load tests](#load-tests)
+9. [Results](#results)
+10. [License](#license)
 
-Antes de tudo, copie o modelo de ambiente do modo desejado e preencha **todas** as senhas e segredos (não há valores
-padrão; o Compose falha se faltarem):
+---
+
+## Running
+
+Requirements: Docker with **Compose 2.20 or later** (the Makefile checks it) and GNU make. Rust and PostgreSQL are
+only needed for the local modes.
+
+First, copy the environment template for the mode you want and fill in **all** passwords and secrets (there are no
+defaults; Compose fails if any is missing):
 
 ```bash
 cp .env.docker.example .env.docker      # make up
-cp .env.local.example  .env.local       # API local + banco em container
-cp .env.external.example .env.external  # banco externo
-openssl rand -base64 48                 # para gerar cada segredo
+cp .env.local.example  .env.local       # local API + database in a container
+cp .env.external.example .env.external  # external database
+openssl rand -base64 48                 # to generate each secret
 ```
 
-| API e worker | PostgreSQL | Comando |
+| API and worker | PostgreSQL | Command |
 |---|---|---|
-| Container | Container do projeto | `make up` |
-| Máquina local | Container do projeto | `make db-up`, `make dev-init`, `make dev-api` e `make dev-worker` |
-| Container | Externo ou instalado na máquina | `make up-external` |
-| Máquina local | Externo | `ENV_FILE=.env.external make dev-init dev-api` e `ENV_FILE=.env.external make dev-worker` |
+| Container | Project container | `make up` |
+| Local machine | Project container | `make db-up`, `make dev-init`, `make dev-api` and `make dev-worker` |
+| Container | External or installed on the machine | `make up-external` |
+| Local machine | External | `ENV_FILE=.env.external make dev-init dev-api` and `ENV_FILE=.env.external make dev-worker` |
 
-A API e o worker não sabem onde o PostgreSQL está: a única diferença entre os modos é o arquivo de ambiente.
+The API and the worker don't know where PostgreSQL runs: the only difference between the modes is the environment file.
 
-### `make up` (tudo em container)
+### `make up` (everything in containers)
 
-Sobe os perfis `db` e `app`. Ordem garantida pelo Compose:
-`postgres` saudável → `bootstrap` → `migrate` → `seed` → `api` + `worker`
-(os temporários com `service_completed_successfully`; a dependência de `postgres` usa `required: false`,
-para o perfil `app` funcionar sem o banco do projeto). Não exige Rust nem PostgreSQL na máquina.
+Starts the `db` and `app` profiles. Order enforced by Compose:
+`postgres` healthy → `bootstrap` → `migrate` → `seed` → `api` + `worker`
+(the one-shot services use `service_completed_successfully`; the dependency on `postgres` uses `required: false`,
+so the `app` profile works without the project database). Requires neither Rust nor PostgreSQL on the machine.
 
 ```bash
 make up
 curl localhost:8080/health/ready
-# Swagger UI (com API_DOCS=true, o padrão do .env.docker.example): http://localhost:8080/docs
+# Swagger UI (with API_DOCS=true, the default in .env.docker.example): http://localhost:8080/docs
 make logs
-make down       # mantém o volume
-make reset      # apaga SOMENTE o volume do PostgreSQL do projeto (pede confirmação; recusado com .env.external)
+make down       # keeps the volume
+make reset      # deletes ONLY the project's PostgreSQL volume (asks for confirmation; refused with .env.external)
 ```
 
-O resultado é: banco `control`, owner (`SEED_OWNER_*`) e a primeira base (`SEED_TENANT_*`) provisionada.
-O admin da primeira base é criado depois pelo owner:
+The result: the `control` database, the owner (`SEED_OWNER_*`) and the first tenant (`SEED_TENANT_*`) provisioned.
+The first tenant's admin is then created by the owner:
 
 ```bash
 TOKEN=$(curl -s -X POST localhost:8080/v1/platform/auth/login -H 'content-type: application/json' \
-  -d '{"email":"owner@exemplo.com","password":"..."}' | jq -r .access_token)
+  -d '{"email":"owner@example.com","password":"..."}' | jq -r .access_token)
 TID=$(curl -s localhost:8080/v1/platform/tenants -H "authorization: Bearer $TOKEN" | jq -r '.items[0].id')
 curl -X POST localhost:8080/v1/platform/tenants/$TID/admins -H "authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' -d '{"email":"admin@acme.com","name":"Admin","password":"senha-com-12+"}'
+  -H 'content-type: application/json' -d '{"email":"admin@acme.com","name":"Admin","password":"password-12+chars"}'
 curl -X POST localhost:8080/v1/auth/login -H 'x-tenant-slug: acme' -H 'content-type: application/json' \
-  -d '{"email":"admin@acme.com","password":"senha-com-12+"}'
+  -d '{"email":"admin@acme.com","password":"password-12+chars"}'
 ```
 
-### API local, banco em container
+### Local API, database in a container
 
 ```bash
-make db-up          # só o perfil db (não sobe a API); publica 127.0.0.1:${DB_PUBLISH_PORT:-5433}
+make db-up          # db profile only (no API); publishes 127.0.0.1:${DB_PUBLISH_PORT:-5433}
 make dev-init       # bootstrap + migrate + seed (cargo run --release)
-make dev-api        # api serve em API_BIND (127.0.0.1:8080)
-make dev-worker     # em outro terminal
+make dev-api        # api serve on API_BIND (127.0.0.1:8080)
+make dev-worker     # in another terminal
 ```
 
-### Banco externo
+### External database
 
-`make up-external` sobe só o perfil `app` (nunca o PostgreSQL do projeto). Use `DB_SSLMODE=verify-full` e coloque o
-CA em `./certs/ca.crt`: o diretório é montado **somente leitura** em `/app/certs` e o `WORKDIR` da imagem é `/app`,
-então `DB_SSL_ROOT_CERT=certs/ca.crt` funciona igual no container e na máquina local.
+`make up-external` starts only the `app` profile (never the project's PostgreSQL). Use `DB_SSLMODE=verify-full` and
+put the CA in `./certs/ca.crt`: the directory is mounted **read-only** at `/app/certs` and the image's `WORKDIR` is
+`/app`, so `DB_SSL_ROOT_CERT=certs/ca.crt` works the same in the container and on the local machine.
 
-PostgreSQL instalado na própria máquina, com a API em container: use `DB_HOST=host.docker.internal` (o Compose define
-`extra_hosts: ["host.docker.internal:host-gateway"]`). O PostgreSQL precisa aceitar conexões da rede Docker
-(`listen_addresses` e uma linha em `pg_hba.conf` para a sub-rede do bridge, ex.: `172.16.0.0/12`).
+PostgreSQL installed on the host, with the API in a container: use `DB_HOST=host.docker.internal` (Compose sets
+`extra_hosts: ["host.docker.internal:host-gateway"]`). PostgreSQL must accept connections from the Docker network
+(`listen_addresses` and a `pg_hba.conf` line for the bridge subnet, e.g. `172.16.0.0/12`).
 
-Se vários projetos Compose compartilham a máquina, defina `COMPOSE_PROJECT_NAME` no arquivo de ambiente.
+If several Compose projects share the machine, set `COMPOSE_PROJECT_NAME` in the environment file.
 
-> Testado: um segundo PostgreSQL 18, fora do perfil `db`, com TLS e certificado próprio, `DB_SSLMODE=verify-full` e
-> `DB_BOOTSTRAP=false`, nos dois modos (container e local).
+> Tested: a second PostgreSQL 18, outside the `db` profile, with TLS and its own certificate, `DB_SSLMODE=verify-full`
+> and `DB_BOOTSTRAP=false`, in both modes (container and local).
 
-### Comandos do binário
+### Binary commands
 
-| Comando | O que faz | Credenciais |
+| Command | What it does | Credentials |
 |---|---|---|
-| `api bootstrap` | Cria de forma idempotente `app_migrator`, `app_runtime` e o banco `control`. Nunca altera a senha de role existente. Com `DB_BOOTSTRAP=false`, só valida. | admin (ou migrator, ao validar) |
-| `api migrate` | Migra o `control` e todos os tenants já provisionados (concorrência `MIGRATE_CONCURRENCY`), reaplica privilégios, sincroniza o catálogo. Um tenant com falha não para os outros; o comando retorna erro no fim. | migrator |
-| `api seed` | Cria o owner e a primeira base. Idempotente, seguro em paralelo (advisory lock). | migrator |
-| `api serve` | Inicia a API (não roda migrations). | runtime |
-| `api worker` | Provisiona tenants pendentes. Acordado por `NOTIFY`, varre a cada 10 s. | migrator |
-| `api healthcheck` | Consulta `/health/ready` da instância local (a imagem distroless não tem shell nem curl). | — |
+| `api bootstrap` | Idempotently creates `app_migrator`, `app_runtime` and the `control` database. Never changes the password of an existing role. With `DB_BOOTSTRAP=false`, it only validates. | admin (or migrator, when validating) |
+| `api migrate` | Migrates `control` and every provisioned tenant (concurrency `MIGRATE_CONCURRENCY`), reapplies privileges and syncs the catalog. A failing tenant doesn't stop the others; the command returns an error at the end. | migrator |
+| `api seed` | Creates the owner and the first tenant. Idempotent and safe to run in parallel (advisory lock). | migrator |
+| `api serve` | Starts the API (does not run migrations). | runtime |
+| `api worker` | Provisions pending tenants. Woken up by `NOTIFY`, also polls every 10 s. | migrator |
+| `api healthcheck` | Calls `/health/ready` on the local instance (the distroless image has neither shell nor curl). | — |
 
-Todos os comandos que acessam o banco repetem a conexão até `DB_CONNECT_RETRY_SECONDS`.
+Every command that touches the database retries the connection for up to `DB_CONNECT_RETRY_SECONDS`.
 
 ---
 
-## Documentação da API (Swagger)
+## API documentation (Swagger)
 
-Com `API_DOCS=true`, a API serve:
+With `API_DOCS=true`, the API serves:
 
-| Caminho | Conteúdo |
+| Path | Content |
 |---|---|
-| `/docs` | Swagger UI, para navegar e testar os endpoints |
-| `/openapi.json` | Especificação OpenAPI 3.1, para gerar clientes ou importar no Postman, Insomnia ou Bruno |
+| `/docs` | Swagger UI, to browse and try the endpoints |
+| `/openapi.json` | OpenAPI 3.1 specification, to generate clients or import into Postman, Insomnia or Bruno |
 
-O padrão é `false`: em produção nada disso é exposto e as rotas respondem 404. Os modelos `.env.docker.example` e
-`.env.local.example` ligam a opção; o `.env.external.example` a deixa desligada.
+The default is `false`: in production none of this is exposed and these paths return 404. The
+`.env.docker.example` and `.env.local.example` templates turn it on; `.env.external.example` leaves it off.
 
-**Testar pelo Swagger UI:**
+**Trying it in Swagger UI:**
 
-1. Abra `http://localhost:8080/docs`.
-2. Faça login:
-   - usuário de tenant: `POST /v1/auth/login`, informando o slug do tenant no campo `X-Tenant-Slug`;
-   - owner ou superusuário: `POST /v1/platform/auth/login`.
-3. Copie o `access_token` da resposta.
-4. Clique em **Authorize** e cole o token no esquema correspondente (`tenant_token` ou `platform_token`).
-5. Com token de plataforma, as rotas de tenant (`/v1/users`, `/v1/profiles` etc.) também precisam do campo
-   `X-Tenant-Slug`.
+1. Open `http://localhost:8080/docs`.
+2. Log in:
+   - tenant user: `POST /v1/auth/login`, filling in the tenant slug in the `X-Tenant-Slug` field;
+   - owner or superuser: `POST /v1/platform/auth/login`.
+3. Copy the `access_token` from the response.
+4. Click **Authorize** and paste the token into the matching scheme (`tenant_token` or `platform_token`).
+5. With a platform token, tenant routes (`/v1/users`, `/v1/profiles`, etc.) also need the `X-Tenant-Slug` field.
 
-**Como a documentação é gerada (`src/openapi.rs`):**
+**How the documentation is generated (`src/openapi.rs`):**
 
-- Cada handler declara caminho, parâmetros, corpo e respostas específicas com `#[utoipa::path]`. Os tipos de
-  requisição e resposta derivam `ToSchema`, e os comentários `///` viram as descrições.
-- A regra de acesso **não é escrita à mão**. Ela é aplicada a partir das mesmas `RouteDef` que montam o roteador e
-  o middleware `enforce`:
-  - esquema de segurança exigido;
-  - feature necessária, descrita no texto da rota;
-  - header `X-Tenant-Slug` nas rotas de tenant;
-  - respostas de erro comuns: 401, 403, 404, 422, 503 etc., no formato `application/problem+json`.
-- Testes unitários falham se:
-  - uma rota do roteador não estiver documentada, ou se a documentação tiver uma rota que não existe;
-  - a segurança de alguma rota divergir do `Access` declarado;
-  - um parâmetro de caminho estiver faltando;
-  - houver `operationId` repetido.
-- Desempenho: a especificação é montada uma vez, na inicialização. O Swagger UI fica fora dos middlewares de
-  autorização e de métricas, e os arquivos estáticos já vêm embutidos no binário (feature `vendored`; o build não
-  baixa nada). As rotas da API não passam por nenhum código novo.
+- Each handler declares its path, parameters, body and specific responses with `#[utoipa::path]`. Request and
+  response types derive `ToSchema`, and `///` comments become the descriptions.
+- The access rule is **not written by hand**. It is applied from the same `RouteDef`s that build the router and the
+  `enforce` middleware:
+  - required security scheme;
+  - required feature, described in the route text;
+  - `X-Tenant-Slug` header on tenant routes;
+  - common error responses: 401, 403, 404, 422, 503, etc., as `application/problem+json`.
+- Unit tests fail if:
+  - a router route is not documented, or the documentation has a route that doesn't exist;
+  - the security of any route differs from its declared `Access`;
+  - a path parameter is missing;
+  - an `operationId` is duplicated.
+- Performance: the specification is built once, at startup. Swagger UI sits outside the authorization and metrics
+  middlewares, and its static files are embedded in the binary (`vendored` feature; the build downloads nothing).
+  API routes don't run any new code.
 
 ---
 
-## Variáveis de ambiente
+## Environment variables
 
-Não existe `DATABASE_URL`: as conexões são montadas por banco (`control` ou `tenant_*`) e por role.
+There is no `DATABASE_URL`: connections are built per database (`control` or `tenant_*`) and per role.
 
-| Variável | Uso | Padrão |
+| Variable | Purpose | Default |
 |---|---|---|
-| `DB_HOST`, `DB_PORT`, `DB_CONTROL_NAME` | servidor e nome do banco control | — / 5432 / `control` |
-| `DB_RUNTIME_USER`, `DB_RUNTIME_PASSWORD` | role da API | `app_runtime` / — |
-| `DB_MIGRATOR_USER`, `DB_MIGRATOR_PASSWORD` | role de migrate/seed/worker | `app_migrator` / — |
-| `DB_ADMIN_USER`, `DB_ADMIN_PASSWORD`, `DB_ADMIN_DATABASE` | só o bootstrap | — / — / `postgres` |
-| `DB_BOOTSTRAP` | `false` = só valida (banco gerenciado) | `true` |
+| `DB_HOST`, `DB_PORT`, `DB_CONTROL_NAME` | server and name of the control database | — / 5432 / `control` |
+| `DB_RUNTIME_USER`, `DB_RUNTIME_PASSWORD` | API role | `app_runtime` / — |
+| `DB_MIGRATOR_USER`, `DB_MIGRATOR_PASSWORD` | migrate/seed/worker role | `app_migrator` / — |
+| `DB_ADMIN_USER`, `DB_ADMIN_PASSWORD`, `DB_ADMIN_DATABASE` | bootstrap only | — / — / `postgres` |
+| `DB_BOOTSTRAP` | `false` = validate only (managed database) | `true` |
 | `DB_SSLMODE`, `DB_SSL_ROOT_CERT` | TLS (`disable` … `verify-full`) | `prefer` / — |
-| `DB_CONNECT_RETRY_SECONDS` | espera pelo banco | 30 (60 no Compose) |
-| `API_BIND` | endereço da API (`0.0.0.0:8080` em container, `127.0.0.1:8080` local) | `127.0.0.1:8080` |
-| `API_PORT` | porta publicada no host pelo Compose | 8080 |
-| `METRICS_BIND`, `WORKER_METRICS_BIND` | `/metrics` em porta interna (não publicada por padrão) | `127.0.0.1:9090` / `:9091` |
-| `API_DOCS` | serve Swagger UI em `/docs` e a especificação em `/openapi.json` | `false` |
-| `JWT_PLATFORM_SECRET`, `JWT_TENANT_SECRET` | segredos distintos, ≥ 32 bytes | — |
-| `JWT_ISSUER` | `iss` dos tokens | `simple-core` |
-| `API_INSTANCES`, `MAX_OPEN_TENANT_POOLS`, `TENANT_POOL_MAX_CONNECTIONS`, `CONTROL_POOL_MAX_CONNECTIONS`, `PG_CONNECTION_RESERVE` | orçamento de conexões (abaixo) | 1 / 50 / 10 / 10 / 10 |
-| `ACCESS_CACHE_CAPACITY`, `PLATFORM_CACHE_CAPACITY`, `TENANT_REGISTRY_CAPACITY` | capacidade dos caches | 200000 / 10000 / 10000 |
-| `PASSWORD_HASH_CONCURRENCY` | vagas do semáforo do Argon2id | nº de núcleos |
-| `LOGIN_RATE_*`, `LOGIN_RATE_WINDOW_SECONDS` | limites de login (plataforma precisa ser mais restritiva) | tenant 60/IP e 10/e-mail, plataforma 20 e 5, por 60 s |
-| `MIGRATE_CONCURRENCY` | tenants migrados em paralelo | 4 |
-| `SEED_OWNER_EMAIL`, `SEED_OWNER_NAME`, `SEED_OWNER_PASSWORD` (≥ 16), `SEED_TENANT_SLUG`, `SEED_TENANT_NAME` | seed, sem padrão | — |
-| `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_SHARED_BUFFERS`, `DB_PUBLISH_PORT` | container do PostgreSQL (o padrão de 1150 cobre 110 pools × 10 conexões) | 1150 / 1GB / 5433 |
-| `API_CPUS`, `API_MEMORY`, `WORKER_CPUS`, `WORKER_MEMORY` | limites dos containers | 4 / 1g / 1 / 256m |
+| `DB_CONNECT_RETRY_SECONDS` | how long to wait for the database | 30 (60 in Compose) |
+| `API_BIND` | API address (`0.0.0.0:8080` in a container, `127.0.0.1:8080` locally) | `127.0.0.1:8080` |
+| `API_PORT` | port published on the host by Compose | 8080 |
+| `METRICS_BIND`, `WORKER_METRICS_BIND` | `/metrics` on an internal port (not published by default) | `127.0.0.1:9090` / `:9091` |
+| `API_DOCS` | serves Swagger UI at `/docs` and the specification at `/openapi.json` | `false` |
+| `JWT_PLATFORM_SECRET`, `JWT_TENANT_SECRET` | distinct secrets, ≥ 32 bytes | — |
+| `JWT_ISSUER` | token `iss` | `simple-core` |
+| `API_INSTANCES`, `MAX_OPEN_TENANT_POOLS`, `TENANT_POOL_MAX_CONNECTIONS`, `CONTROL_POOL_MAX_CONNECTIONS`, `PG_CONNECTION_RESERVE` | connection budget (below) | 1 / 50 / 10 / 10 / 10 |
+| `ACCESS_CACHE_CAPACITY`, `PLATFORM_CACHE_CAPACITY`, `TENANT_REGISTRY_CAPACITY` | cache capacities | 200000 / 10000 / 10000 |
+| `PASSWORD_HASH_CONCURRENCY` | Argon2id semaphore permits | number of cores |
+| `LOGIN_RATE_*`, `LOGIN_RATE_WINDOW_SECONDS` | login limits (platform must be stricter) | tenant 60/IP and 10/e-mail, platform 20 and 5, per 60 s |
+| `MIGRATE_CONCURRENCY` | tenants migrated in parallel | 4 |
+| `SEED_OWNER_EMAIL`, `SEED_OWNER_NAME`, `SEED_OWNER_PASSWORD` (≥ 16), `SEED_TENANT_SLUG`, `SEED_TENANT_NAME` | seed, no defaults | — |
+| `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_SHARED_BUFFERS`, `DB_PUBLISH_PORT` | PostgreSQL container (the default of 1150 covers 110 pools × 10 connections) | 1150 / 1GB / 5433 |
+| `API_CPUS`, `API_MEMORY`, `WORKER_CPUS`, `WORKER_MEMORY` | container limits | 4 / 1g / 1 / 256m |
 
-**Orçamento de conexões.** A API não inicia se
+**Connection budget.** The API refuses to start if
 `API_INSTANCES × (MAX_OPEN_TENANT_POOLS × TENANT_POOL_MAX_CONNECTIONS + CONTROL_POOL_MAX_CONNECTIONS)`
-passar de `max_connections − PG_CONNECTION_RESERVE`. O `PgListener` usa uma das conexões do `control`.
+exceeds `max_connections − PG_CONNECTION_RESERVE`. The `PgListener` uses one of the `control` connections.
 
-Cada serviço do Compose recebe somente as credenciais que usa: só o `bootstrap` vê as administrativas, e a `api` só
-as de `app_runtime`. As credenciais do migrator nunca estão no container da API.
+Each Compose service receives only the credentials it uses: only `bootstrap` sees the admin credentials, and `api`
+only those of `app_runtime`. The migrator credentials are never present in the API container.
 
 ---
 
-## Banco gerenciado (DB_BOOTSTRAP=false)
+## Managed database (DB_BOOTSTRAP=false)
 
-Quando o DBA cria os recursos, o `bootstrap` só valida (com as credenciais do migrator). Privilégios necessários:
+When a DBA creates the resources, `bootstrap` only validates them (using the migrator credentials). Required
+privileges:
 
 ```sql
 CREATE ROLE app_migrator LOGIN CREATEDB NOSUPERUSER NOCREATEROLE PASSWORD '...';
@@ -214,21 +214,21 @@ REVOKE ALL ON DATABASE control FROM PUBLIC;
 GRANT CONNECT ON DATABASE control TO app_migrator, app_runtime;
 ```
 
-- `app_migrator` precisa de `CREATEDB` (cria um banco por tenant e é dono dos bancos e objetos). Não precisa ser
-  superusuário nem ter `CREATEROLE`.
-- `app_runtime` precisa só de `LOGIN`. Todos os demais privilégios (por tabela e por coluna) são concedidos pelo
-  `migrate` e pelo provisionamento.
-- PostgreSQL 15 ou superior (o schema `public` pertence ao dono do banco).
+- `app_migrator` needs `CREATEDB` (it creates one database per tenant and owns the databases and objects). It needs
+  neither superuser nor `CREATEROLE`.
+- `app_runtime` only needs `LOGIN`. All other privileges (per table and per column) are granted by `migrate` and by
+  provisioning.
+- PostgreSQL 15 or later (the `public` schema belongs to the database owner).
 
-A validação falha se `app_runtime` tiver `CREATEDB` ou se alguma das duas for superusuária.
+Validation fails if `app_runtime` has `CREATEDB` or if either role is a superuser.
 
 ---
 
-## Migrar do banco em container para um banco externo
+## Moving from the container database to an external one
 
-1. Pare a aplicação: `make down` (o volume do PostgreSQL permanece).
-2. Suba só o banco do projeto (`make db-up`) e faça o dump **de todos os bancos da aplicação** (`control` e cada
-   `tenant_*`), incluindo roles:
+1. Stop the application: `make down` (the PostgreSQL volume stays).
+2. Start only the project database (`make db-up`) and dump **every application database** (`control` and each
+   `tenant_*`), including roles:
    ```bash
    docker compose --env-file .env.docker exec -T postgres pg_dumpall -U "$DB_ADMIN_USER" --roles-only > roles.sql
    for db in control $(docker compose --env-file .env.docker exec -T postgres psql -U "$DB_ADMIN_USER" -Atc \
@@ -236,303 +236,313 @@ A validação falha se `app_runtime` tiver `CREATEDB` ou se alguma das duas for 
      docker compose --env-file .env.docker exec -T postgres pg_dump -U "$DB_ADMIN_USER" -Fc "$db" > "$db.dump"
    done
    ```
-3. No destino: crie as roles (com o `roles.sql`, ou pelo DBA conforme a seção anterior), crie cada banco com
-   `OWNER app_migrator TEMPLATE template0 ENCODING 'UTF8'` e restaure com `pg_restore --no-owner --role=app_migrator -d <banco>`.
-4. Reaplique as restrições de `CONNECT` e os privilégios: rode o `bootstrap` (ou valide com `DB_BOOTSTRAP=false`) e
-   depois o `migrate`, que reaplica os grants do `control` e de todos os tenants. Para os bancos de tenant, execute
-   também `REVOKE ALL ON DATABASE tenant_x FROM PUBLIC; GRANT CONNECT ON DATABASE tenant_x TO app_runtime;`.
-5. Copie o `.env.docker` para `.env.external`, ajuste `DB_HOST`, `DB_PORT`, `DB_SSLMODE`, o CA em `./certs` e
-   `MAX_OPEN_TENANT_POOLS` conforme o `max_connections` do destino, e suba com `make up-external`.
+3. On the target: create the roles (from `roles.sql`, or by the DBA as in the previous section), create each database
+   with `OWNER app_migrator TEMPLATE template0 ENCODING 'UTF8'` and restore with
+   `pg_restore --no-owner --role=app_migrator -d <database>`.
+4. Reapply the `CONNECT` restrictions and privileges: run `bootstrap` (or validate with `DB_BOOTSTRAP=false`) and then
+   `migrate`, which reapplies the grants on `control` and on every tenant. For the tenant databases, also run
+   `REVOKE ALL ON DATABASE tenant_x FROM PUBLIC; GRANT CONNECT ON DATABASE tenant_x TO app_runtime;`.
+5. Copy `.env.docker` to `.env.external`, adjust `DB_HOST`, `DB_PORT`, `DB_SSLMODE`, the CA in `./certs` and
+   `MAX_OPEN_TENANT_POOLS` according to the target's `max_connections`, and start with `make up-external`.
 
-Os nomes `tenant_<uuid>` estão gravados em `tenants.db_name` e precisam ser mantidos.
+The `tenant_<uuid>` names are stored in `tenants.db_name` and must be kept.
 
 ---
 
-## Arquitetura e decisões técnicas
+## Architecture and technical decisions
 
 ```
-src/main.rs              comandos do binário
-src/app.rs               roteador, middlewares globais, /metrics, serve
-src/config.rs            configuração só por ambiente; Secret nunca aparece em Debug
-src/state.rs             AppState, invalidação de cache e PgListener
+src/main.rs              binary commands
+src/app.rs               router, global middlewares, /metrics, serve
+src/config.rs            environment-only configuration; Secret never shows in Debug
+src/state.rs             AppState, cache invalidation and PgListener
 src/error.rs             RFC 9457 (application/problem+json)
-src/openapi.rs           especificação OpenAPI (utoipa) e Swagger UI
-src/password.rs          Argon2id em spawn_blocking + Semaphore
-src/auth/                jwt, login/refresh/logout, middleware de acesso, rate limit
-src/tenancy/             registro de tenants, pools por tenant, resolução do tenant, provisionamento
-src/access/              catálogo, perfis, exceções, resolução de permissões e caches
-src/users/               CRUD de usuários
-src/platform/            endpoints de plataforma
+src/openapi.rs           OpenAPI specification (utoipa) and Swagger UI
+src/password.rs          Argon2id in spawn_blocking + Semaphore
+src/auth/                jwt, login/refresh/logout, access middleware, rate limit
+src/tenancy/             tenant registry, per-tenant pools, tenant resolution, provisioning
+src/access/              catalog, profiles, overrides, permission resolution and caches
+src/users/               user CRUD
+src/platform/            platform endpoints
 src/cli/                 bootstrap, migrate, seed, worker, healthcheck
-migrations/control/      schema do control (+ triggers de NOTIFY)
-migrations/tenant/       schema de cada tenant
+migrations/control/      control schema (+ NOTIFY triggers)
+migrations/tenant/       schema of each tenant
 ```
 
 ### Multi-tenancy
 
-- Banco `control` com tenants, owner/superusuários, sessões e auditoria de plataforma; um banco
-  `tenant_<uuid sem hífens>` por tenant, sem `tenant_id` nas tabelas.
-- **Não há pool padrão nem fallback.** Todo acesso a dados de tenant passa por `TenantCtx`, criado só pelo middleware
-  depois de resolver o tenant; os repositórios recebem explicitamente o executor desse pool.
-- Token de tenant: o tenant vem só da claim assinada `tid`; `X-Tenant-Slug` divergente → 403. Token de plataforma:
-  exige `X-Tenant-Slug`. Apenas tenants `active` são atendidos; suspenso → 403 para todos (inclusive no login).
-- Registro de tenants em `moka` (TTL 30 s), por id e por slug, com cache negativo. Invalidação por trigger
-  (`AFTER INSERT OR UPDATE ON tenants` → `pg_notify`), entregue só no `COMMIT`.
-- Pools por tenant: `PgPool` lazy em `moka` com `EvictionPolicy::lru()`, `try_get_with`, `time_to_idle` de 10 min,
-  `min_connections=0`, `idle_timeout` de 60 s, `acquire_timeout` de 1 s (→ 503) e `statement_timeout` de 2 s enviado
-  no pacote de startup (sem ida extra ao banco).
-- **Remoção de pool sem derrubar requisições:** o pool fica num `Arc<TenantPool>`; o `Drop` do último `Arc` fecha o
-  pool numa task separada. Requisições que já pegaram o handle terminam normalmente, e o cache libera a vaga na hora.
+- A `control` database with tenants, owner/superusers, sessions and the platform audit log; one
+  `tenant_<uuid without hyphens>` database per tenant, with no `tenant_id` in the tables.
+- **There is no default pool and no fallback.** All tenant data access goes through `TenantCtx`, created only by the
+  middleware after resolving the tenant; repositories explicitly receive that pool's executor.
+- Tenant token: the tenant comes only from the signed `tid` claim; a mismatching `X-Tenant-Slug` → 403. Platform
+  token: requires `X-Tenant-Slug`. Only `active` tenants are served; suspended → 403 for everyone (including login).
+- Tenant registry in `moka` (30 s TTL), by id and by slug, with negative caching. Invalidated by a trigger
+  (`AFTER INSERT OR UPDATE ON tenants` → `pg_notify`), delivered only on `COMMIT`.
+- Per-tenant pools: lazy `PgPool` in `moka` with `EvictionPolicy::lru()`, `try_get_with`, 10 min `time_to_idle`,
+  `min_connections=0`, 60 s `idle_timeout`, 1 s `acquire_timeout` (→ 503) and a 2 s `statement_timeout` sent in the
+  startup packet (no extra round trip).
+- **Evicting a pool without breaking requests:** the pool lives in an `Arc<TenantPool>`; the `Drop` of the last `Arc`
+  closes the pool in a separate task. Requests that already hold the handle finish normally, and the cache frees the
+  slot immediately.
 
-### Roles do PostgreSQL
+### PostgreSQL roles
 
-- `app_migrator` (dono de tudo, `CREATEDB`) usado só por `migrate`, `seed`, `worker` e bootstrap.
-- `app_runtime` (API) no `control`: `tenants` SELECT/INSERT e UPDATE só em `name, status, last_error, updated_at`;
-  `platform_users` SELECT/INSERT/DELETE e UPDATE só em `name, password_hash, is_active, updated_at`;
+- `app_migrator` (owns everything, `CREATEDB`) used only by `migrate`, `seed`, `worker` and bootstrap.
+- `app_runtime` (API) on `control`: `tenants` SELECT/INSERT and UPDATE only on `name, status, last_error, updated_at`;
+  `platform_users` SELECT/INSERT/DELETE and UPDATE only on `name, password_hash, is_active, updated_at`;
   `platform_refresh_tokens` DML; `platform_audit` SELECT/INSERT.
-- Nos tenants: DML nas tabelas, `access_audit` só SELECT/INSERT, e `modules`/`features` só SELECT (o catálogo é
-  somente leitura na API). `REVOKE ALL ON DATABASE ... FROM PUBLIC` (inclui `TEMP`) e `CONNECT` só para `app_runtime`.
-- O bootstrap envia **verificadores SCRAM-SHA-256** calculados no cliente (`PASSWORD 'SCRAM-SHA-256$...'`): a senha
-  em texto nunca aparece em SQL nem em log, nem do lado do servidor.
+- On tenants: DML on the tables, `access_audit` SELECT/INSERT only, and `modules`/`features` SELECT only (the catalog
+  is read-only for the API). `REVOKE ALL ON DATABASE ... FROM PUBLIC` (including `TEMP`) and `CONNECT` only for
+  `app_runtime`.
+- Bootstrap sends **SCRAM-SHA-256 verifiers** computed on the client (`PASSWORD 'SCRAM-SHA-256$...'`): the plaintext
+  password never appears in SQL or in logs, not even on the server side.
 
-### Autorização (negada por padrão)
+### Authorization (deny by default)
 
-Toda rota é declarada como `RouteDef { method, path, access, handler }`, com `Access::{Public, Platform,
-PlatformOwner, TenantToken, Feature(f), SelfOr(f)}`, e o roteador aplica o middleware `enforce` a cada uma. Os
-handlers pegam o contexto por extractor; sem o middleware, o extractor falha com 500 (nunca libera). Um teste percorre
-todas as rotas e verifica 401 sem token, 403 sem feature, 403 para superusuário em rota de owner e 403 para token de
-tenant em rota de plataforma.
+Every route is declared as `RouteDef { method, path, access, handler }`, with `Access::{Public, Platform,
+PlatformOwner, TenantToken, Feature(f), SelfOr(f)}`, and the router applies the `enforce` middleware to each one.
+Handlers get the context through an extractor; without the middleware the extractor fails with 500 (it never grants
+access). A test walks every route and checks 401 without a token, 403 without the feature, 403 for a superuser on an
+owner route and 403 for a tenant token on a platform route.
 
-- Permissões efetivas resolvidas numa única ida ao banco (usuário + a query de features como subquery `ARRAY(...)`).
-- `Arc<Principal>` imutável por `(tenant_id, user_id)` com `is_active`, `is_tenant_admin` e um **bitset `u64`** de
-  features: verificação O(1) sem hash nem alocação.
-- Cache de plataforma separado (`role`, `is_active`). **Rotas do owner consultam `role`/`is_active` direto no
-  `control`, sem cache.**
-- TTL 30 s, capacidade configurável, coalescência com `try_get_with`. Alteração de usuário invalida a entrada; de perfil,
-  o tenant inteiro (`invalidate_entries_if`).
-- Depois do commit: invalida localmente e publica `pg_notify('cache_invalidation', ...)` no `control` (o NOTIFY é por
-  banco). Falha na publicação → log + métrica `cache_invalidation_publish_failures_total`; o TTL limita a defasagem.
-- Um único `PgListener` por instância, com `eager_reconnect`; ao reconectar, limpa todos os caches.
+- Effective permissions are resolved in a single database round trip (the user + the features query as an
+  `ARRAY(...)` subquery).
+- Immutable `Arc<Principal>` per `(tenant_id, user_id)` with `is_active`, `is_tenant_admin` and a **`u64` bitset** of
+  features: O(1) checks with no hashing or allocation.
+- Separate platform cache (`role`, `is_active`). **Owner routes read `role`/`is_active` straight from `control`, with
+  no cache.**
+- 30 s TTL, configurable capacity, coalescing with `try_get_with`. A user change invalidates its entry; a profile
+  change invalidates the whole tenant (`invalidate_entries_if`).
+- After commit: invalidates locally and publishes `pg_notify('cache_invalidation', ...)` on `control` (NOTIFY is
+  per database). A publish failure → log + `cache_invalidation_publish_failures_total` metric; the TTL bounds the
+  staleness.
+- A single `PgListener` per instance, with `eager_reconnect`; on reconnect, it clears every cache.
 
-### Proteções contra escalada
+### Privilege escalation protections
 
-- Owner único (índice parcial único) e criado só pelo seed; nenhuma rota tem campo `role`, e todas as queries de
-  superusuário filtram `role = 'superuser'`.
-- `is_tenant_admin` só muda pelos endpoints do owner; campos desconhecidos são rejeitados (422).
-- Quem não tem acesso total só concede features que possui — via perfil (só o que for **adicionado** é checado),
-  exceção `allow` e também remoção de `deny` (que equivale a conceder).
-- Usuário comum não altera os próprios perfis/exceções; admin de tenant só é alterado/excluído por usuário de plataforma
-  (o próprio admin pode trocar nome e senha).
-- Último admin ativo: o `UPDATE`/`DELETE` acontece primeiro e, se o alvo era admin ativo, a transação pega
-  `pg_advisory_xact_lock` e verifica se ainda resta algum. Em READ COMMITTED isso serializa as corridas corretamente
-  (testado com remoções concorrentes).
+- A single owner (unique partial index), created only by the seed; no route has a `role` field, and every superuser
+  query filters on `role = 'superuser'`.
+- `is_tenant_admin` only changes through owner endpoints; unknown fields are rejected (422).
+- Users without full access can only grant features they have — through a profile (only what is **added** is
+  checked), an `allow` override, and also removing a `deny` (which is equivalent to granting).
+- A regular user can't change their own profiles/overrides; a tenant admin can only be changed/deleted by a platform
+  user (the admin can change their own name and password).
+- Last active admin: the `UPDATE`/`DELETE` runs first and, if the target was an active admin, the transaction takes
+  `pg_advisory_xact_lock` and checks whether any remains. Under READ COMMITTED this serializes the races correctly
+  (tested with concurrent removals).
 
-### Autenticação
+### Authentication
 
-- JWT HS256 de 15 min, algoritmo fixo, `exp`/`iss`/`aud`/`sub` obrigatórios, segredos e audiências diferentes para
-  plataforma (`simple-core:platform`) e tenant (`simple-core:tenant`). Sem papel nem permissões no token.
-- Refresh tokens opacos de 256 bits, guardados como SHA-256, 30 dias, rotacionados a cada uso; reuso de token revogado
-  revoga todas as sessões do usuário. Troca de senha e desativação também revogam as sessões.
-- Logins: mesmo 401 para tenant inexistente, e-mail inexistente, senha errada e conta inativa, sempre executando
-  Argon2id (hash fictício quando não há usuário).
-- Rate limit de login por escopo (plataforma ou tenant), IP e e-mail, em janela fixa (`moka` com TTL) → 429.
+- 15 min HS256 JWT, fixed algorithm, required `exp`/`iss`/`aud`/`sub`, distinct secrets and audiences for the platform
+  (`simple-core:platform`) and tenants (`simple-core:tenant`). No role or permissions in the token.
+- Opaque 256-bit refresh tokens, stored as SHA-256, 30 days, rotated on every use; reusing a revoked token revokes
+  all of the user's sessions. Changing the password or deactivating the user also revokes the sessions.
+- Logins: the same 401 for a nonexistent tenant, nonexistent e-mail, wrong password and inactive account, always
+  running Argon2id (with a dummy hash when there is no user).
+- Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429.
 
-### Desempenho e resiliência
+### Performance and resilience
 
-- Argon2id `m=19456, t=2, p=1` em `spawn_blocking`, `Semaphore` do tamanho do nº de núcleos, espera máx. 1 s → 503.
-- Sem lock global no caminho da requisição; com caches quentes, resolução do tenant e autorização não consultam o banco.
-- Logs JSON via `tracing-appender` não bloqueante, sem log por requisição em `info`.
-- Métricas: latência por rota (`route` = padrão da rota, nunca o tenant), pools abertos, conexões abertas/em uso, fila
-  do hash, fila de provisionamento, acertos/erros de cada cache, invalidações, timeouts e panics.
-- Timeout global de 3 s (503), body máx. 16 KB, `CatchPanicLayer` (com `panic="unwind"` o processo não cai), graceful
-  shutdown em SIGTERM.
-- Release com `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip=true`, `panic="unwind"`.
-- Paginação por keyset (`WHERE id > $1 ORDER BY id LIMIT $2`), colunas explícitas, `INSERT` direto com 23505 → 409,
-  `UPDATE ... RETURNING` numa query, `rows_affected` no `DELETE`, UUIDv7 gerado na aplicação.
+- Argon2id `m=19456, t=2, p=1` in `spawn_blocking`, a `Semaphore` sized to the number of cores, max wait 1 s → 503.
+- No global lock on the request path; with warm caches, tenant resolution and authorization don't hit the database.
+- JSON logs via non-blocking `tracing-appender`, no per-request log at `info`.
+- Metrics: latency per route (`route` = the route pattern, never the tenant), open pools, open/busy connections, hash
+  queue, provisioning queue, hits/misses per cache, invalidations, timeouts and panics.
+- 3 s global timeout (503), 16 KB max body, `CatchPanicLayer` (with `panic="unwind"` the process doesn't crash),
+  graceful shutdown on SIGTERM.
+- Release with `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip=true`, `panic="unwind"`.
+- Keyset pagination (`WHERE id > $1 ORDER BY id LIMIT $2`), explicit columns, direct `INSERT` with 23505 → 409,
+  `UPDATE ... RETURNING` in one query, `rows_affected` on `DELETE`, UUIDv7 generated by the application.
 
-### Provisionamento
+### Provisioning
 
-`seed` e `worker` usam a mesma rotina retomável: advisory lock por tenant em conexão dedicada → revalida `db_name` →
-`CREATE DATABASE ... TEMPLATE template0 ENCODING 'UTF8'` se não existir (identificador escapado) → `CONNECT` e
-privilégios → migrations do tenant → catálogo (upsert por `code`, numa transação) → `active`. Em erro: `failed` com
-`last_error` curto e sem segredos; `POST /v1/platform/tenants/{id}/retry` volta para `provisioning`. O worker reivindica
-com `FOR UPDATE SKIP LOCKED` e é acordado pelo trigger que publica em `tenant_provisioning`.
+`seed` and `worker` share the same resumable routine: per-tenant advisory lock on a dedicated connection → revalidate
+`db_name` → `CREATE DATABASE ... TEMPLATE template0 ENCODING 'UTF8'` if missing (escaped identifier) → `CONNECT` and
+privileges → tenant migrations → catalog (upsert by `code`, in one transaction) → `active`. On error: `failed` with a
+short `last_error` containing no secrets; `POST /v1/platform/tenants/{id}/retry` moves it back to `provisioning`. The
+worker claims tenants with `FOR UPDATE SKIP LOCKED` and is woken up by the trigger that publishes on
+`tenant_provisioning`.
 
-As migrations são incorporadas ao binário (`sqlx::migrate!`) e devem seguir expand/contract; o catálogo nunca remove
+Migrations are embedded in the binary (`sqlx::migrate!`) and must follow expand/contract; the catalog never removes
 features.
 
-### SQLx com dois schemas
+### SQLx with two schemas
 
-`make sqlx-prepare` cria o banco temporário `sqlx_check`, aplica `migrations/control` e `migrations/tenant` (não há
-tabelas em comum), roda `cargo sqlx prepare` e remove o banco. `make sqlx-check` falha se `.sqlx` estiver desatualizado.
-A imagem compila com `SQLX_OFFLINE=true`, sem banco.
+`make sqlx-prepare` creates the temporary `sqlx_check` database, applies `migrations/control` and `migrations/tenant`
+(they share no tables), runs `cargo sqlx prepare` and drops the database. `make sqlx-check` fails if `.sqlx` is out of
+date. The image builds with `SQLX_OFFLINE=true`, without a database.
 
 ---
 
-## Testes
+## Tests
 
 ```bash
 make db-up
-make test          # ou: cargo test (lê .env.local se DB_HOST não estiver definido)
+make test          # or: cargo test (reads .env.local if DB_HOST is not set)
 make fmt lint sqlx-check
 ```
 
-Cada teste de integração cria o próprio `control` (`test_<uuid>`) e seus tenants num PostgreSQL real, então os testes
-rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 unitários e 30 de integração):
+Each integration test creates its own `control` (`test_<uuid>`) and tenants on a real PostgreSQL, so tests run in
+parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 30 integration):
 
-- **Plataforma** (`tests/platform.rs`): só o owner cria tenants/superusuários/admins (superusuário, admin e usuário
-  comum → 403); superusuário entra em todos os tenants mas não altera `is_tenant_admin`; ninguém cria, altera ou exclui
-  o owner, inclusive em requisições concorrentes e por SQL com `app_runtime`; superusuário desativado perde o acesso
-  nas duas instâncias; escopos de token; varredura de todas as rotas; rate limit; `me` e superusuários.
-- **Isolamento** (`tests/isolation.rs`): mesmo e-mail em dois tenants e na plataforma; token do tenant A sem acesso a
-  B (inclusive com outro `X-Tenant-Slug` e refresh); admin restrito ao próprio tenant; suspensão rápida e reativação
-  nas duas instâncias; `app_runtime` sem DDL, `CREATE DATABASE`, alteração de `db_name`/`role`/auditorias e sem `TEMP`;
-  ACL do banco sem `PUBLIC`.
-- **Acesso** (`tests/access.rs`): CRUD com 404/409/422/413 e e-mails duplicados concorrentes; paginação keyset;
-  permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; inativo/401/403;
-  autoatendimento de nome e senha; invalidação entre duas instâncias afetando só o tenant certo; proteções contra
-  escalada; corrida no último admin; rotação e reuso de refresh token; catálogo, perfis e auditoria.
-- **Operação** (`tests/operation.rs`): seed executado duas vezes e quatro em paralelo (um owner, uma base, senha e OID
-  do banco inalterados; e-mail de superusuário não é promovido); dois workers disputando o mesmo tenant; provisionamento
-  interrompido em cada uma das 5 etapas e retomado; `migrate` com um tenant falhando sem afetar os outros e retornando
-  erro; remoção de pool do cache com consulta em andamento e LRU com capacidade 2; bootstrap idempotente e modo de
-  validação.
-- **Documentação** (`tests/docs.rs` e `src/openapi.rs`): `/docs` e `/openapi.json` só existem com `API_DOCS=true` e
-  não liberam as rotas da API; a especificação cobre exatamente as rotas do roteador, com segurança e parâmetros
-  coerentes com o `Access` de cada uma.
+- **Platform** (`tests/platform.rs`): only the owner creates tenants/superusers/admins (superuser, admin and regular
+  user → 403); a superuser can enter every tenant but can't change `is_tenant_admin`; nobody creates, changes or
+  deletes the owner, including concurrent requests and SQL with `app_runtime`; a deactivated superuser loses access on
+  both instances; token scopes; a sweep over every route; rate limit; `me` and superusers.
+- **Isolation** (`tests/isolation.rs`): the same e-mail in two tenants and on the platform; a tenant A token has no
+  access to B (including with another `X-Tenant-Slug` and refresh); an admin is restricted to their own tenant; fast
+  suspension and reactivation on both instances; `app_runtime` has no DDL, no `CREATE DATABASE`, can't change
+  `db_name`/`role`/audit logs and has no `TEMP`; database ACL without `PUBLIC`.
+- **Access** (`tests/access.rs`): CRUD with 404/409/422/413 and concurrent duplicate e-mails; keyset pagination;
+  permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored;
+  inactive/401/403; self-service name and password; invalidation across two instances affecting only the right
+  tenant; escalation protections; last-admin race; refresh token rotation and reuse; catalog, profiles and audit.
+- **Operations** (`tests/operation.rs`): seed run twice and four times in parallel (one owner, one tenant, password
+  and database OID unchanged; a superuser e-mail is not promoted); two workers competing for the same tenant;
+  provisioning interrupted at each of the 5 steps and resumed; `migrate` with one failing tenant not affecting the
+  others and returning an error; evicting a pool from the cache with a query in flight and LRU with capacity 2;
+  idempotent bootstrap and validation mode.
+- **Documentation** (`tests/docs.rs` and `src/openapi.rs`): `/docs` and `/openapi.json` only exist with
+  `API_DOCS=true` and don't open up API routes; the specification covers exactly the router's routes, with security
+  and parameters consistent with each route's `Access`.
 
 ---
 
-## Testes de carga
+## Load tests
 
 ```bash
-make up                                                     # stack com a imagem de release
+make up                                                     # stack with the release image
 docker compose --env-file .env.docker -f compose.yaml -f load/compose.load.yaml \
-  --profile db --profile app up -d --wait                   # aplica o pinning de CPU da carga
-make load-populate                                          # 100 tenants, 1M+99k usuários, perfis, exceções
-make load                                                   # todos os cenários (≈ 40 min)
-make load-scenario S=get_by_id RATE=15000                   # um cenário
+  --profile db --profile app up -d --wait                   # applies the load CPU pinning
+make load-populate                                          # 100 tenants, 1M+99k users, profiles, overrides
+make load                                                   # every scenario (≈ 40 min)
+make load-scenario S=get_by_id RATE=15000                   # a single scenario
 ```
 
-- **População** (`load/populate.sh`): 100 tenants criados pela API e provisionados pelo worker; `load-000` com
-  1.000.000 de usuários e os outros 99 com 1.000; 20 perfis por tenant; 1 ou 2 perfis por usuário; exceções em 5% dos
-  usuários; senha real Argon2id. Tokens para 5.950 usuários diferentes (1.000 no tenant grande + 50 em cada pequeno),
-  assinados pelo k6 com o segredo de tenant.
-- **Isolamento de CPU** (`load/compose.load.yaml`): API em `cpuset 0-3`, PostgreSQL em `4-7`, k6 em `8-15` — núcleos
-  físicos separados (SMT: 0-1, 2-3, ...). `fsync` e `synchronous_commit` ligados.
-- **Método:** taxa de chegada constante (k6 `constant-arrival-rate`), 30 s de aquecimento e 3 min de medição; o resumo
-  considera só a medição. Se a API não acompanha, o RPS medido fica abaixo da taxa pedida. CPU/memória por
-  `docker stats`, conexões por `pg_stat_activity`, acerto dos caches pela diferença dos contadores do `/metrics`.
-- **Mistura**: 80% `GET` por id, 15% listagem, 4% `PATCH` de nome e 1% `DELETE` (vítimas criadas antes de cada
-  execução, removidas uma única vez). Em "todos os tenants", tráfego Zipf (o tenant *i* recebe peso 1/(i+1)).
-- Apenas no override de carga os limites de login são altos: o cenário de login mede o Argon2id, não o rate limit.
+- **Data** (`load/populate.sh`): 100 tenants created through the API and provisioned by the worker; `load-000` with
+  1,000,000 users and the other 99 with 1,000 each; 20 profiles per tenant; 1 or 2 profiles per user; overrides on 5%
+  of the users; real Argon2id passwords. Tokens for 5,950 distinct users (1,000 in the large tenant + 50 in each small
+  one), signed by k6 with the tenant secret.
+- **CPU isolation** (`load/compose.load.yaml`): API on `cpuset 0-3`, PostgreSQL on `4-7`, k6 on `8-15` — separate
+  physical cores (SMT: 0-1, 2-3, ...). `fsync` and `synchronous_commit` on.
+- **Method:** constant arrival rate (k6 `constant-arrival-rate`), 30 s warm-up and 3 min of measurement; the summary
+  covers only the measurement. If the API can't keep up, the measured RPS falls below the requested rate. CPU/memory
+  from `docker stats`, connections from `pg_stat_activity`, cache hit ratios from the difference of the `/metrics`
+  counters.
+- **Mix**: 80% `GET` by id, 15% list, 4% name `PATCH` and 1% `DELETE` (victims created before each run, deleted only
+  once). In "all tenants", Zipf traffic (tenant *i* gets weight 1/(i+1)).
+- Only in the load override are login limits high: the login scenario measures Argon2id, not the rate limit.
 
 ### Hardware
 
-| Item | Valor |
+| Item | Value |
 |---|---|
-| CPU | AMD Ryzen 7 9800X3D (8 núcleos / 16 threads) |
-| RAM | 32 GB (VM do Docker: 16 GB, 16 vCPUs) |
-| SO | Windows 11 Pro + Docker Desktop 29.5 (WSL2) |
-| API | 4 vCPUs = 2 núcleos físicos com SMT (`cpuset 0-3`), limite 2 GB |
-| PostgreSQL 18 | 4 vCPUs = 2 núcleos físicos (`cpuset 4-7`), `shared_buffers=1GB`, `max_connections=1150` |
-| k6 | 4 núcleos físicos (`cpuset 8-15`), na mesma rede bridge |
+| CPU | AMD Ryzen 7 9800X3D (8 cores / 16 threads) |
+| RAM | 32 GB (Docker VM: 16 GB, 16 vCPUs) |
+| OS | Windows 11 Pro + Docker Desktop 29.5 (WSL2) |
+| API | 4 vCPUs = 2 physical cores with SMT (`cpuset 0-3`), 2 GB limit |
+| PostgreSQL 18 | 4 vCPUs = 2 physical cores (`cpuset 4-7`), `shared_buffers=1GB`, `max_connections=1150` |
+| k6 | 4 physical cores (`cpuset 8-15`), on the same bridge network |
 
-Observação: "4 vCPUs" aqui são 2 núcleos físicos com SMT, e o Windows continua agendando trabalho do host nos mesmos
-núcleos da VM. Repetições do mesmo cenário variaram bastante (ver abaixo), principalmente no p99.
+Note: "4 vCPUs" here means 2 physical cores with SMT, and Windows keeps scheduling host work on the same cores as the
+VM. Repeated runs of the same scenario varied considerably (see below), especially at p99.
 
-## Resultados
+## Results
 
-Configuração final: imagem release (`lto="fat"`, mimalloc), `TENANT_POOL_MAX_CONNECTIONS=10`,
-`MAX_OPEN_TENANT_POOLS=110`, `CONTROL_POOL_MAX_CONNECTIONS=10`, PostgreSQL com `max_connections=1150`,
-`fsync`/`synchronous_commit` ligados. Cada linha: 30 s de aquecimento + 3 min de medição, taxa de chegada constante.
-Dados brutos em `load/results/30-final/` (JSON do k6, amostras de CPU/memória/conexões e contadores dos caches).
+Final configuration: release image (`lto="fat"`, mimalloc), `TENANT_POOL_MAX_CONNECTIONS=10`,
+`MAX_OPEN_TENANT_POOLS=110`, `CONTROL_POOL_MAX_CONNECTIONS=10`, PostgreSQL with `max_connections=1150`,
+`fsync`/`synchronous_commit` on. Each row: 30 s warm-up + 3 min of measurement, constant arrival rate.
+Raw data in `load/results/30-final/` (k6 JSON, CPU/memory/connection samples and cache counters).
 
-| Cenário | Taxa pedida | RPS | p50 ms | p95 ms | p99 ms | Erros | CPU API méd/máx | Mem API máx | CPU PG méd/máx | Mem PG máx | Conexões runtime méd/máx | Acerto dos caches |
+| Scenario | Requested rate | RPS | p50 ms | p95 ms | p99 ms | Errors | API CPU avg/max | API mem max | PG CPU avg/max | PG mem max | Runtime connections avg/max | Cache hit ratio |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| get_by_id | 15000 | 14994 | 0.40 | 0.97 | 7.25 | 0.000% | 282% / 299% | 69 MiB | 178% / 191% | 482 MiB | 12 / 12 (ativas máx 3) | tenant_pool 100.00% tenant_registry 100.00% access 99.78% |
-| list | 4000 | 4000 | 0.49 | 0.64 | 0.75 | 0.000% | 98% / 112% | 72 MiB | 71% / 81% | 605 MiB | 12 / 12 (ativas máx 2) | tenant_pool 100.00% tenant_registry 100.00% access 99.17% |
-| mix_single | 9000 | 8989 | 0.44 | 2.43 | 14.01 | 0.000% | 211% / 235% | 72 MiB | 142% / 161% | 710 MiB | 20 / 20 (ativas máx 5) | tenant_pool 100.00% tenant_registry 100.00% access 99.63% |
-| mix_all | 9000 | 9000 | 0.46 | 2.08 | 3.07 | 0.000% | 213% / 225% | 103 MiB | 161% / 189% | 2862 MiB | 688 / 691 (ativas máx 6) | tenant_pool 100.00% tenant_registry 99.96% access 97.72% |
-| pool_churn | 8000 | 947 | 765.89 | 1532.24 | 1592.33 | 0.060% | 191% / 201% | 157 MiB | 382% / 389% | 1408 MiB | 137 / 237 (ativas máx 3) | tenant_pool 41.13% tenant_registry 99.65% access 84.39% |
-| noisy_neighbor (normais) | 1500 | 1500 | 0.44 | 0.76 | 1.18 | 0.000% | 163% / 196% | 115 MiB | 98% / 120% | 2715 MiB | 724 / 724 (ativas máx 1) | tenant_pool 100.00% tenant_registry 99.96% access 97.88% |
-| noisy_neighbor (barulhento, 6000/s) | 1500 | 6000 | 0.40 | 0.57 | 0.95 | 0.000% | 163% / 196% | 115 MiB | 98% / 120% | 2715 MiB | 724 / 724 (ativas máx 1) | tenant_pool 100.00% tenant_registry 99.96% access 97.88% |
-| login | 150 | 150 | 11.15 | 13.73 | 16.02 | 0.000% | 160% / 166% | 186 MiB | 10% / 21% | 2740 MiB | 238 / 729 (ativas máx 1) | tenant_pool 100.00% tenant_registry 99.98% |
-| create | 150 | 150 | 12.28 | 34.99 | 389.73 | 0.326% | 164% / 182% | 190 MiB | 10% / 13% | 950 MiB | 20 / 20 (ativas máx 10) | tenant_pool 100.00% tenant_registry 99.98% access 81.22% |
-| read_with_invalidations | 10000 | 9999 | 0.43 | 0.80 | 2.47 | 0.000% | 224% / 241% | 111 MiB | 149% / 157% | 954 MiB | 20 / 20 (ativas máx 3) | tenant_pool 100.00% tenant_registry 100.00% platform 98.34% access 80.17% |
-| read_with_provisioning | 10000 | 10000 | 0.39 | 0.58 | 1.48 | 0.000% | 214% / 228% | 115 MiB | 129% / 144% | 1154 MiB | 20 / 20 (ativas máx 2) | tenant_pool 100.00% tenant_registry 100.00% access 99.67% |
+| get_by_id | 15000 | 14994 | 0.40 | 0.97 | 7.25 | 0.000% | 282% / 299% | 69 MiB | 178% / 191% | 482 MiB | 12 / 12 (max 3 active) | tenant_pool 100.00% tenant_registry 100.00% access 99.78% |
+| list | 4000 | 4000 | 0.49 | 0.64 | 0.75 | 0.000% | 98% / 112% | 72 MiB | 71% / 81% | 605 MiB | 12 / 12 (max 2 active) | tenant_pool 100.00% tenant_registry 100.00% access 99.17% |
+| mix_single | 9000 | 8989 | 0.44 | 2.43 | 14.01 | 0.000% | 211% / 235% | 72 MiB | 142% / 161% | 710 MiB | 20 / 20 (max 5 active) | tenant_pool 100.00% tenant_registry 100.00% access 99.63% |
+| mix_all | 9000 | 9000 | 0.46 | 2.08 | 3.07 | 0.000% | 213% / 225% | 103 MiB | 161% / 189% | 2862 MiB | 688 / 691 (max 6 active) | tenant_pool 100.00% tenant_registry 99.96% access 97.72% |
+| pool_churn | 8000 | 947 | 765.89 | 1532.24 | 1592.33 | 0.060% | 191% / 201% | 157 MiB | 382% / 389% | 1408 MiB | 137 / 237 (max 3 active) | tenant_pool 41.13% tenant_registry 99.65% access 84.39% |
+| noisy_neighbor (normal tenants) | 1500 | 1500 | 0.44 | 0.76 | 1.18 | 0.000% | 163% / 196% | 115 MiB | 98% / 120% | 2715 MiB | 724 / 724 (max 1 active) | tenant_pool 100.00% tenant_registry 99.96% access 97.88% |
+| noisy_neighbor (noisy tenant, 6000/s) | 1500 | 6000 | 0.40 | 0.57 | 0.95 | 0.000% | 163% / 196% | 115 MiB | 98% / 120% | 2715 MiB | 724 / 724 (max 1 active) | tenant_pool 100.00% tenant_registry 99.96% access 97.88% |
+| login | 150 | 150 | 11.15 | 13.73 | 16.02 | 0.000% | 160% / 166% | 186 MiB | 10% / 21% | 2740 MiB | 238 / 729 (max 1 active) | tenant_pool 100.00% tenant_registry 99.98% |
+| create | 150 | 150 | 12.28 | 34.99 | 389.73 | 0.326% | 164% / 182% | 190 MiB | 10% / 13% | 950 MiB | 20 / 20 (max 10 active) | tenant_pool 100.00% tenant_registry 99.98% access 81.22% |
+| read_with_invalidations | 10000 | 9999 | 0.43 | 0.80 | 2.47 | 0.000% | 224% / 241% | 111 MiB | 149% / 157% | 954 MiB | 20 / 20 (max 3 active) | tenant_pool 100.00% tenant_registry 100.00% platform 98.34% access 80.17% |
+| read_with_provisioning | 10000 | 10000 | 0.39 | 0.58 | 1.48 | 0.000% | 214% / 228% | 115 MiB | 129% / 144% | 1154 MiB | 20 / 20 (max 2 active) | tenant_pool 100.00% tenant_registry 100.00% access 99.67% |
 
-CPU em % de um vCPU (400% = os 4 vCPUs). "Conexões" = conexões de `app_runtime` em `pg_stat_activity`.
-"Acerto dos caches" = hits/(hits+misses) durante a medição, por cache.
+CPU as % of one vCPU (400% = all 4 vCPUs). "Connections" = `app_runtime` connections in `pg_stat_activity`.
+"Cache hit ratio" = hits/(hits+misses) during the measurement, per cache.
 
-### Metas
+### Targets
 
-| Meta | Resultado | |
+| Target | Result | |
 |---|---|---|
-| `GET` por id, um tenant, caches quentes: ≥ 15.000 RPS, p99 < 10 ms, sem erros | 14.994 RPS (taxa pedida 15.000, sem descartes relevantes), p99 7,25 ms, 0 erros | atingida |
-| Mistura em um tenant: ≥ 8.000 RPS, p99 < 25 ms, erros < 0,1% | 8.989 RPS (pedidos 9.000), p99 14,0 ms, 0 erros | atingida |
+| `GET` by id, one tenant, warm caches: ≥ 15,000 RPS, p99 < 10 ms, no errors | 14,994 RPS (15,000 requested, no meaningful drops), p99 7.25 ms, 0 errors | met |
+| Mix on one tenant: ≥ 8,000 RPS, p99 < 25 ms, errors < 0.1% | 8,989 RPS (9,000 requested), p99 14.0 ms, 0 errors | met |
 
-O teste usa taxa constante: o RPS acompanha a taxa pedida e não mede a capacidade máxima acima dela. No `get_by_id` a
-API ficou em ~280% de CPU (de 400%), então há alguma folga, mas não foi medida.
+The test uses a constant rate: RPS follows the requested rate and does not measure the maximum capacity above it. In
+`get_by_id` the API sat at ~280% CPU (out of 400%), so there is some headroom, but it wasn't measured.
 
-### Histórico de otimizações (uma alteração por vez)
+### Optimization history (one change at a time)
 
-| # | Alteração | Cenário | Antes | Depois | Decisão |
+| # | Change | Scenario | Before | After | Decision |
 |---|---|---|---|---|---|
-| 01 | Linha de base (pool 10, `test_before_acquire` padrão) | `get_by_id` 15k/s | — | 12.926 RPS, p99 115 ms; repetição: 14.735 RPS, p99 68 ms | — |
-| 02 | `test_before_acquire(false)`: o sqlx fazia um ping no PostgreSQL a cada `acquire` | `get_by_id` 15k/s | p95 50,7 ms, p99 68,1 ms, CPU API 329%, PG 220% | 14.854 RPS, p95 3,0 ms, p99 29,6 ms, CPU API 290%, PG 181% | mantida |
-| 03 | mimalloc × alocador padrão (latência) | `get_by_id` ×2, `mix_single` | p99 29,6 / 14,3 ms; mix p99 3,18 ms | p99 19,8 / 27,8 ms; mix p99 3,14 ms | sem diferença além do ruído |
-| 04 | Pools para todos os tenants ativos: 3 conexões × 120 pools (antes 10 × 25) | `mix_all` 9k/s | 1.873 RPS, p99 1.520 ms, **78% de erros** (portas efêmeras esgotadas pela troca de pools: `Cannot assign requested address`) | 8.985 RPS, p99 6,5 ms, 0% | causa confirmada, ver #07 |
-| 05 | `net.ipv4.tcp_tw_reuse=1` no container da API | `pool_churn` | 1.832 RPS, **86,7% de erros** | 866–947 RPS, 0,06–0,4% de erros | mantida |
-| 06 | mimalloc (memória) | `login` 150/s | RSS da API 1.493 MiB (fragmentação das arenas da glibc com os buffers de 19 MiB do Argon2id em várias threads de `spawn_blocking`) | 133 MiB, mesma latência | **mimalloc mantido** (padrão da feature) |
-| 07 | 3 conexões por tenant eram poucas para o tenant quente | `get_by_id` | 3 conexões: 8.568 RPS, p50 92 ms (fila no pool, CPU da API 200%) | 6 conexões: p99 63 ms; 10 conexões: p99 10,7 ms | volta para 10 × 110 pools, `max_connections=1150` |
+| 01 | Baseline (pool of 10, default `test_before_acquire`) | `get_by_id` 15k/s | — | 12,926 RPS, p99 115 ms; repeat: 14,735 RPS, p99 68 ms | — |
+| 02 | `test_before_acquire(false)`: sqlx was pinging PostgreSQL on every `acquire` | `get_by_id` 15k/s | p95 50.7 ms, p99 68.1 ms, API CPU 329%, PG 220% | 14,854 RPS, p95 3.0 ms, p99 29.6 ms, API CPU 290%, PG 181% | kept |
+| 03 | mimalloc vs. default allocator (latency) | `get_by_id` ×2, `mix_single` | p99 29.6 / 14.3 ms; mix p99 3.18 ms | p99 19.8 / 27.8 ms; mix p99 3.14 ms | no difference beyond noise |
+| 04 | Pools for every active tenant: 3 connections × 120 pools (was 10 × 25) | `mix_all` 9k/s | 1,873 RPS, p99 1,520 ms, **78% errors** (ephemeral ports exhausted by pool churn: `Cannot assign requested address`) | 8,985 RPS, p99 6.5 ms, 0% | root cause confirmed, see #07 |
+| 05 | `net.ipv4.tcp_tw_reuse=1` in the API container | `pool_churn` | 1,832 RPS, **86.7% errors** | 866–947 RPS, 0.06–0.4% errors | kept |
+| 06 | mimalloc (memory) | `login` 150/s | API RSS 1,493 MiB (glibc arena fragmentation from Argon2id's 19 MiB buffers across many `spawn_blocking` threads) | 133 MiB, same latency | **mimalloc kept** (default feature) |
+| 07 | 3 connections per tenant were too few for the hot tenant | `get_by_id` | 3 connections: 8,568 RPS, p50 92 ms (pool queueing, API CPU 200%) | 6 connections: p99 63 ms; 10 connections: p99 10.7 ms | back to 10 × 110 pools, `max_connections=1150` |
 
-Também foi corrigido o gerador: assinar JWTs por VU e copiar os tenants em cada VU deixava o k6 em 388% de CPU e
-4 GB de memória, limitando o `mix_all` a 4.322 RPS. Os tokens passaram a ser assinados uma vez, num `SharedArray`.
+The load generator was fixed too: signing JWTs per VU and copying the tenants into every VU kept k6 at 388% CPU and
+4 GB of memory, capping `mix_all` at 4,322 RPS. Tokens are now signed once, in a `SharedArray`.
 
-Lições: a amostragem de `pg_stat_activity` a cada 5 s (máx. 5 conexões ativas) subestimou a concorrência real no
-pool; a decisão do tamanho do pool só ficou correta medindo latência com 3, 6 e 10 conexões. E há variância
-considerável entre execuções idênticas nesta máquina (01 contra a repetição), principalmente no p99.
+Lessons: sampling `pg_stat_activity` every 5 s (max 5 active connections) underestimated the real concurrency in the
+pool; the pool size decision was only right after measuring latency with 3, 6 and 10 connections. There is also
+considerable variance between identical runs on this machine (01 vs. its repeat), especially at p99.
 
-### Gargalos e observações
+### Bottlenecks and observations
 
-- **Leitura num tenant (`get_by_id`)**: CPU da API (~280–300% dos 400%) e do PostgreSQL (~180%). Com os caches quentes,
-  a resolução do tenant e a autorização não vão ao banco (acerto de 99,8% no `access`, 100% em registro e pools);
-  sobra uma query por PK por requisição.
-- **Troca de pools (`pool_churn`, 20 pools para 100 tenants com tráfego uniforme)**: ~80% das requisições abrem uma
-  conexão nova. O limite é o **PostgreSQL saturado (≈ 385% de CPU) abrindo conexões** (fork do backend + SCRAM), em
-  ~950 RPS e p99 ~1,6 s. O `tcp_tw_reuse` eliminou os erros por portas esgotadas, mas a vazão continua limitada.
-  **Meta não aplicável, mas o resultado é ruim por natureza**: na prática, `MAX_OPEN_TENANT_POOLS` precisa cobrir os
-  tenants ativos (como no `mix_all`, que roda limpo); reduzir esse custo exigiria um pooler externo (PgBouncer, fora
-  de escopo).
-- **Mistura em todos os tenants (Zipf)**: 9.000 RPS, p99 3,1 ms, sem erros. O custo é o número de conexões abertas
-  (~690 com 100 tenants ativos): os pools são lazy, mas conexões de tenants com tráfego ficam abertas até 60 s ociosas.
-- **Tenant barulhento**: com um tenant a 6.000 req/s, os outros 98 tenants (1.500 req/s somados) ficaram com p99 de
-  1,2 ms. Cada tenant tem o próprio pool, então um tenant quente não esgota as conexões dos demais.
-- **Invalidações durante a leitura** (o tenant inteiro invalidado 2×/s): 9.999 RPS, p99 2,5 ms. O acerto do cache
-  `access` cai para 80%, e a coalescência do `try_get_with` evita a avalanche de recargas.
-- **Provisionamento durante a leitura** (um tenant novo a cada 10 s): 10.000 RPS, p99 1,5 ms, sem impacto visível.
-- **Login e POST**: limitados intencionalmente pelo Argon2id (`m=19456,t=2,p=1`, ~11 ms por hash). A 150 req/s, o
-  login ficou com p99 16 ms e 0 erros. O `POST /v1/users` teve p99 15 ms e 0 erros na bateria anterior (`20-final`),
-  mas nesta teve p99 390 ms e 0,33% de erros (503 por espera > 1 s no semáforo do hash) com a mesma configuração do
-  hash: sinal de interferência pontual de CPU (o host Windows divide os núcleos com a VM). Os parâmetros do Argon2id
-  nunca foram reduzidos para melhorar o benchmark.
-- **Memória**: API entre 70 e 190 MiB em todos os cenários (com mimalloc).
+- **Reads on one tenant (`get_by_id`)**: API CPU (~280–300% of 400%) and PostgreSQL CPU (~180%). With warm caches,
+  tenant resolution and authorization don't hit the database (99.8% hit ratio on `access`, 100% on registry and
+  pools); what remains is one primary-key query per request.
+- **Pool churn (`pool_churn`, 20 pools for 100 tenants with uniform traffic)**: ~80% of requests open a new
+  connection. The limit is **PostgreSQL saturated (≈ 385% CPU) opening connections** (backend fork + SCRAM), at
+  ~950 RPS and p99 ~1.6 s. `tcp_tw_reuse` removed the port-exhaustion errors, but throughput stays limited.
+  **No target applies here, but the result is inherently poor**: in practice, `MAX_OPEN_TENANT_POOLS` must cover the
+  active tenants (as in `mix_all`, which runs clean); reducing this cost would need an external pooler (PgBouncer,
+  out of scope).
+- **Mix across all tenants (Zipf)**: 9,000 RPS, p99 3.1 ms, no errors. The cost is the number of open connections
+  (~690 with 100 active tenants): pools are lazy, but connections of tenants with traffic stay open for up to 60 s
+  idle.
+- **Noisy neighbor**: with one tenant at 6,000 req/s, the other 98 tenants (1,500 req/s combined) stayed at a p99 of
+  1.2 ms. Each tenant has its own pool, so a hot tenant doesn't exhaust the others' connections.
+- **Invalidations during reads** (the whole tenant invalidated 2×/s): 9,999 RPS, p99 2.5 ms. The `access` cache hit
+  ratio drops to 80%, and `try_get_with` coalescing prevents a reload stampede.
+- **Provisioning during reads** (a new tenant every 10 s): 10,000 RPS, p99 1.5 ms, no visible impact.
+- **Login and POST**: intentionally bound by Argon2id (`m=19456,t=2,p=1`, ~11 ms per hash). At 150 req/s, login had a
+  p99 of 16 ms and 0 errors. `POST /v1/users` had a p99 of 15 ms and 0 errors in the previous run (`20-final`), but in
+  this one a p99 of 390 ms and 0.33% errors (503 from waiting > 1 s on the hash semaphore) with the same hash
+  configuration: a sign of transient CPU interference (the Windows host shares cores with the VM). The Argon2id
+  parameters were never lowered to improve the benchmark.
+- **Memory**: API between 70 and 190 MiB across all scenarios (with mimalloc).
 
-### Limitações do ambiente
+### Environment limitations
 
-- Docker Desktop no Windows (VM WSL2): o host continua usando os mesmos núcleos, o que aumenta a variância.
-- "4 vCPUs" = 2 núcleos físicos com SMT, para a API e para o PostgreSQL.
-- k6 na mesma máquina, em núcleos separados, falando com a API pela rede bridge do Docker.
+- Docker Desktop on Windows (WSL2 VM): the host keeps using the same cores, which increases variance.
+- "4 vCPUs" = 2 physical cores with SMT, for both the API and PostgreSQL.
+- k6 on the same machine, on separate cores, talking to the API over Docker's bridge network.
 
 ---
 
-## Licença
+## License
 
-Licenciado, à sua escolha, sob qualquer uma das duas licenças:
+Licensed under either of
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 - MIT License ([LICENSE-MIT](LICENSE-MIT))
 
-Salvo declaração explícita em contrário, qualquer contribuição enviada para inclusão neste projeto, conforme definido
-na licença Apache-2.0, será licenciada da mesma forma dupla, sem termos ou condições adicionais.
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you,
+as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
