@@ -134,7 +134,7 @@ pub async fn password_hash<'e, E: PgExecutor<'e>>(exec: E, id: Uuid) -> Result<O
 /// em READ COMMITTED, a consulta após o lock enxerga o que as transações
 /// concorrentes já confirmaram.
 pub async fn lock_and_any_active_admin(conn: &mut PgConnection) -> Result<bool, sqlx::Error> {
-    sqlx::query!("SELECT pg_advisory_xact_lock(hashtextextended('simple-core:tenant-admins', 0))")
+    sqlx::query!("SELECT pg_advisory_xact_lock(hashtextextended('app:tenant-admins', 0))")
         .execute(&mut *conn)
         .await?;
     sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM users WHERE is_tenant_admin AND is_active) AS "any!""#)

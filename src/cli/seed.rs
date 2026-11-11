@@ -78,11 +78,11 @@ pub async fn run(db: &DbConfig) -> anyhow::Result<()> {
 pub async fn run_with(db: &DbConfig, p: &SeedParams, fp: Failpoint<'_>) -> anyhow::Result<SeedReport> {
     let (email, owner_name, tenant_name) = p.validate()?;
     let mut conn = db::connect("control", &db.migrator(&db.control_db)?, db.connect_retry).await?;
-    sqlx::query("SELECT pg_advisory_lock(hashtextextended('simple-core:seed', 0))")
+    sqlx::query("SELECT pg_advisory_lock(hashtextextended('app:seed', 0))")
         .execute(&mut conn)
         .await?;
     let res = seed_locked(db, &mut conn, p, &email, &owner_name, &tenant_name, fp).await;
-    let _ = sqlx::query("SELECT pg_advisory_unlock(hashtextextended('simple-core:seed', 0))")
+    let _ = sqlx::query("SELECT pg_advisory_unlock(hashtextextended('app:seed', 0))")
         .execute(&mut conn)
         .await;
     let _ = conn.close().await;

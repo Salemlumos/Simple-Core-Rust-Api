@@ -116,7 +116,7 @@ pub fn is_fk_violation(e: &sqlx::Error) -> bool {
 
 /// Advisory lock por tenant, calculado no servidor para todos os processos usarem a mesma chave.
 pub async fn lock_tenant(conn: &mut PgConnection, id: uuid::Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("SELECT pg_advisory_lock(hashtextextended('simple-core:tenant:' || $1::text, 0))")
+    sqlx::query("SELECT pg_advisory_lock(hashtextextended('app:tenant:' || $1::text, 0))")
         .bind(id)
         .execute(conn)
         .await
@@ -124,7 +124,7 @@ pub async fn lock_tenant(conn: &mut PgConnection, id: uuid::Uuid) -> Result<(), 
 }
 
 pub async fn unlock_tenant(conn: &mut PgConnection, id: uuid::Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("SELECT pg_advisory_unlock(hashtextextended('simple-core:tenant:' || $1::text, 0))")
+    sqlx::query("SELECT pg_advisory_unlock(hashtextextended('app:tenant:' || $1::text, 0))")
         .bind(id)
         .execute(conn)
         .await

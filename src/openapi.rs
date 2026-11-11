@@ -143,6 +143,10 @@ struct AccessRules;
 
 impl Modify for AccessRules {
     fn modify(&self, api: &mut utoipa::openapi::OpenApi) {
+        // Sem `license` no Cargo.toml o utoipa gera um objeto vazio; omite.
+        if api.info.license.as_ref().is_some_and(|l| l.name.is_empty()) {
+            api.info.license = None;
+        }
         let components = api.components.get_or_insert_with(Default::default);
         components.add_security_scheme(
             PLATFORM_TOKEN,

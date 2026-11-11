@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT pg_advisory_xact_lock(hashtextextended('simple-core:tenant-admins', 0))",
+  "query": "SELECT pg_advisory_xact_lock(hashtextextended('app:tenant-admins', 0))",
   "describe": {
     "columns": [
       {
@@ -17,5 +17,5 @@
       null
     ]
   },
-  "hash": "d20790b90fabf6baf6649327370b2952593cf64432bf5b96255874f741baa8dd"
+  "hash": "b9d87f7516725b60a8ef89a9acad02652331e030ffc3315bb6229ebc9e8b5552"
 }
