@@ -13,7 +13,7 @@ use super::repository::{self as repo, PlatformUserOut, TenantOut};
 use crate::access::repository::audit_as;
 use crate::auth::middleware::Platform;
 use crate::db::{is_unique_violation, is_valid_slug, tenant_db_name};
-use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult};
+use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, reason};
 use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 use crate::tenancy::registry::{TenantInfo, TenantStatus};
@@ -60,20 +60,20 @@ pub async fn patch_me(
     if let Some(p) = &b.password {
         v.password("password", p);
         if b.current_password.is_none() {
-            v.err("current_password", "required to change your password");
+            v.err("current_password", "required", "required to change your password");
         }
     } else if b.current_password.is_some() {
-        v.err("current_password", "only allowed together with password");
+        v.err("current_password", "not_allowed", "only allowed together with password");
     }
     if b.name.is_none() && b.password.is_none() {
-        v.err("body", "no fields to update");
+        v.err("body", "no_changes", "no fields to update");
     }
     v.finish()?;
     let hash = match (b.password, b.current_password) {
         (Some(p), Some(current)) => {
             let stored = repo::platform_password_hash(&st.control, actor.id).await?;
             if !st.hasher.verify(current, stored).await? {
-                return Err(AppError::Forbidden("current password is invalid"));
+                return Err(AppError::Forbidden(reason::INVALID_CURRENT_PASSWORD));
             }
             Some(st.hasher.hash(p).await?)
         }
@@ -153,7 +153,11 @@ pub async fn create_tenant(
     let mut v = Validator::default();
     let name = v.name("name", &b.name);
     if !is_valid_slug(&b.slug) {
-        v.err("slug", "must match ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$");
+        v.err(
+            "slug",
+            "invalid_format",
+            "must match ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+        );
     }
     v.finish()?;
     let id = Uuid::now_v7();
@@ -162,7 +166,7 @@ pub async fn create_tenant(
         .await
         .map_err(|e| {
             if is_unique_violation(&e) {
-                AppError::Conflict("slug already in use")
+                AppError::Conflict(reason::SLUG_TAKEN)
             } else {
                 e.into()
             }
@@ -216,16 +220,16 @@ pub async fn patch_tenant(
         && s != "active"
         && s != "suspended"
     {
-        v.err("status", "must be active or suspended");
+        v.err("status", "invalid_choice", "must be active or suspended");
     }
     if b.name.is_none() && b.status.is_none() {
-        v.err("body", "no fields to update");
+        v.err("body", "no_changes", "no fields to update");
     }
     v.finish()?;
     let mut tx = st.control.begin().await?;
     let Some(t) = repo::update_tenant(&mut tx, id, name.as_deref(), b.status.as_deref()).await? else {
         return Err(match repo::get_tenant(&mut *tx, id).await? {
-            Some(_) => AppError::Conflict("tenant status can only change between active and suspended"),
+            Some(_) => AppError::Conflict(reason::TENANT_STATUS_TRANSITION),
             None => AppError::NotFound,
         });
     };
@@ -263,7 +267,7 @@ pub async fn retry_tenant(
     let mut tx = st.control.begin().await?;
     let Some(t) = repo::retry_tenant(&mut tx, id).await? else {
         return Err(match repo::get_tenant(&mut *tx, id).await? {
-            Some(_) => AppError::Conflict("only failed tenants can be retried"),
+            Some(_) => AppError::Conflict(reason::TENANT_NOT_FAILED),
             None => AppError::NotFound,
         });
     };
@@ -312,7 +316,7 @@ pub async fn create_superuser(
         .await
         .map_err(|e| {
             if is_unique_violation(&e) {
-                AppError::Conflict("email already in use")
+                AppError::Conflict(reason::EMAIL_TAKEN)
             } else {
                 e.into()
             }
@@ -357,7 +361,7 @@ pub async fn patch_superuser(
         v.password("password", p);
     }
     if b.name.is_none() && b.password.is_none() && b.is_active.is_none() {
-        v.err("body", "no fields to update");
+        v.err("body", "no_changes", "no fields to update");
     }
     v.finish()?;
     let hash = match b.password {
@@ -411,7 +415,7 @@ async fn tenant_for_admins(st: &AppState, id: Uuid, require_active: bool) -> App
     match t.status {
         TenantStatus::Active => Ok(t),
         TenantStatus::Suspended if !require_active => Ok(t),
-        _ => Err(AppError::Conflict("tenant is not active")),
+        _ => Err(AppError::Conflict(reason::TENANT_NOT_ACTIVE)),
     }
 }
 
@@ -471,7 +475,7 @@ pub async fn create_admin(
     .await
     .map_err(|e| {
         if is_unique_violation(&e) {
-            AppError::Conflict("email already in use")
+            AppError::Conflict(reason::EMAIL_TAKEN)
         } else {
             e.into()
         }

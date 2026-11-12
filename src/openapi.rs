@@ -47,6 +47,12 @@ pub struct Problem {
     title: String,
     #[schema(example = 403)]
     status: u16,
+    /// Código estável do erro, para decidir e traduzir mensagens no cliente.
+    /// Sempre presente: o padrão do status (`unauthorized`, `not_found`,
+    /// `validation_failed`, `rate_limited`, `unavailable`...) ou um motivo
+    /// específico de 403/409 (`missing_feature`, `cannot_grant`, `email_taken`...).
+    #[schema(example = "missing_feature")]
+    code: String,
     /// Explicação curta; nunca contém senha, hash ou token.
     #[schema(example = "missing feature users.update")]
     detail: Option<String>,
@@ -131,6 +137,11 @@ pub struct Health {
     )
 )]
 pub struct ApiDoc;
+
+/// Especificação em JSON formatado (`api openapi`), a mesma servida em [`SPEC_PATH`].
+pub fn spec_json() -> anyhow::Result<String> {
+    Ok(ApiDoc::openapi().to_pretty_json()?)
+}
 
 /// Swagger UI em [`DOCS_PATH`] e a especificação em [`SPEC_PATH`].
 pub fn docs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {

@@ -13,7 +13,7 @@ use super::repository::{self as repo, NewUser, UserPatch};
 use crate::access::catalog::Feature;
 use crate::access::repository::audit;
 use crate::auth::middleware::Tenant;
-use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult};
+use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, reason};
 use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 
@@ -74,7 +74,7 @@ pub async fn create(
 
 fn conflict_on_email(e: sqlx::Error) -> AppError {
     if crate::db::is_unique_violation(&e) {
-        AppError::Conflict("email already in use")
+        AppError::Conflict(reason::EMAIL_TAKEN)
     } else {
         e.into()
     }
@@ -148,14 +148,15 @@ pub async fn patch(
     let can_update = ctx.can(Feature::UsersUpdate);
     let privileged = b.email.is_some() || b.is_active.is_some();
     if (privileged || !is_self) && !can_update {
-        return Err(AppError::Forbidden("missing feature users.update"));
+        return Err(AppError::Forbidden(reason::MISSING_USERS_UPDATE));
     }
     if b.name.is_none() && b.email.is_none() && b.password.is_none() && b.is_active.is_none() {
-        return Err(AppError::invalid("body", "no fields to update"));
+        return Err(AppError::invalid("body", "no_changes", "no fields to update"));
     }
     if b.current_password.is_some() && b.password.is_none() {
         return Err(AppError::invalid(
             "current_password",
+            "not_allowed",
             "only allowed together with password",
         ));
     }
@@ -166,7 +167,7 @@ pub async fn patch(
     if let Some(p) = &b.password {
         v.password("password", p);
         if is_self && b.current_password.is_none() {
-            v.err("current_password", "required to change your own password");
+            v.err("current_password", "required", "required to change your own password");
         }
     }
     v.finish()?;
@@ -174,7 +175,7 @@ pub async fn patch(
     if is_self && let (Some(_), Some(current)) = (&b.password, b.current_password.clone()) {
         let stored = repo::password_hash(ctx.db(), id).await?;
         if !st.hasher.verify(current, stored).await? {
-            return Err(AppError::Forbidden("current password is invalid"));
+            return Err(AppError::Forbidden(reason::INVALID_CURRENT_PASSWORD));
         }
     }
     let hash = match b.password {
@@ -195,12 +196,12 @@ pub async fn patch(
         .map_err(conflict_on_email)?
     else {
         return Err(match repo::is_admin(&mut *tx, id).await? {
-            Some(_) => AppError::Forbidden("only platform users can change a tenant admin"),
+            Some(_) => AppError::Forbidden(reason::ADMIN_CHANGE_PLATFORM_ONLY),
             None => AppError::NotFound,
         });
     };
     if user.is_tenant_admin && b.is_active == Some(false) && !repo::lock_and_any_active_admin(&mut tx).await? {
-        return Err(AppError::Conflict("cannot deactivate the last active tenant admin"));
+        return Err(AppError::Conflict(reason::LAST_ADMIN_DEACTIVATE));
     }
     if hash.is_some() || b.is_active == Some(false) {
         repo::revoke_sessions(&mut tx, id).await?;
@@ -249,12 +250,12 @@ pub async fn delete(
     let mut tx = ctx.db().begin().await?;
     let Some(deleted) = repo::delete(&mut tx, id, ctx.is_platform()).await? else {
         return Err(match repo::is_admin(&mut *tx, id).await? {
-            Some(_) => AppError::Forbidden("only platform users can delete a tenant admin"),
+            Some(_) => AppError::Forbidden(reason::ADMIN_DELETE_PLATFORM_ONLY),
             None => AppError::NotFound,
         });
     };
     if deleted.was_active_admin && !repo::lock_and_any_active_admin(&mut tx).await? {
-        return Err(AppError::Conflict("cannot delete the last active tenant admin"));
+        return Err(AppError::Conflict(reason::LAST_ADMIN_DELETE));
     }
     audit(&mut tx, &ctx, "user.delete", "user", id, json!({})).await?;
     tx.commit().await?;

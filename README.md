@@ -135,6 +135,9 @@ With `API_DOCS=true`, the API serves:
 The default is `false`: in production none of this is exposed and these paths return 404. The
 `.env.docker.example` and `.env.local.example` templates turn it on; `.env.external.example` leaves it off.
 
+To get the specification without running the API or a database (e.g. to generate a client), use
+`make openapi` (writes `openapi.json`; change the path with `OPENAPI_OUT=...`) or `api openapi > openapi.json`.
+
 **Trying it in Swagger UI:**
 
 1. Open `http://localhost:8080/docs`.
@@ -164,6 +167,13 @@ The default is `false`: in production none of this is exposed and these paths re
   middlewares, and its static files are embedded in the binary (`vendored` feature; the build downloads nothing).
   API routes don't run any new code.
 
+**Errors:** every error is `application/problem+json` (RFC 9457) with a stable `code` field. It is either the default
+for the status (`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) or a specific 403/409
+reason (`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; full list in
+`src/error.rs`). In a 422, each item of `errors` also has `field` and `code` (`required`, `invalid_email`,
+`invalid_length`...). Clients should branch and translate on `code`; `detail` and `message` are English text for
+humans and may change.
+
 ---
 
 ## Environment variables
@@ -183,6 +193,7 @@ There is no `DATABASE_URL`: connections are built per database (`control` or `te
 | `API_PORT` | port published on the host by Compose | 8080 |
 | `METRICS_BIND`, `WORKER_METRICS_BIND` | `/metrics` on an internal port (not published by default) | `127.0.0.1:9090` / `:9091` |
 | `API_DOCS` | serves Swagger UI at `/docs` and the specification at `/openapi.json` | `false` |
+| `AUTH_COOKIE_SECURE` | `Secure` attribute of the refresh cookie (turn off only for plain HTTP outside `localhost`) | `true` |
 | `JWT_PLATFORM_SECRET`, `JWT_TENANT_SECRET` | distinct secrets, ≥ 32 bytes | — |
 | `JWT_ISSUER` | token `iss` | `simple-core` |
 | `API_INSTANCES`, `MAX_OPEN_TENANT_POOLS`, `TENANT_POOL_MAX_CONNECTIONS`, `CONTROL_POOL_MAX_CONNECTIONS`, `PG_CONNECTION_RESERVE` | connection budget (below) | 1 / 50 / 10 / 10 / 10 |
@@ -340,6 +351,10 @@ owner route and 403 for a tenant token on a platform route.
   (`simple-core:platform`) and tenants (`simple-core:tenant`). No role or permissions in the token.
 - Opaque 256-bit refresh tokens, stored as SHA-256, 30 days, rotated on every use; reusing a revoked token revokes
   all of the user's sessions. Changing the password or deactivating the user also revokes the sessions.
+- Browser clients send `X-Auth-Mode: cookie`: login and refresh put the refresh token in an `HttpOnly; Secure;
+  SameSite=Strict` cookie (`sc_platform_rt` on `/v1/platform/auth`, `sc_tenant_rt` on `/v1/auth`) instead of the body,
+  and refresh and logout read it from there. The required header also blocks CSRF (no CORS is enabled). One tenant
+  session per browser: logging into another tenant replaces the cookie.
 - Logins: the same 401 for a nonexistent tenant, nonexistent e-mail, wrong password and inactive account, always
   running Argon2id (with a dummy hash when there is no user).
 - Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429.
@@ -396,6 +411,10 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
   access to B (including with another `X-Tenant-Slug` and refresh); an admin is restricted to their own tenant; fast
   suspension and reactivation on both instances; `app_runtime` has no DDL, no `CREATE DATABASE`, can't change
   `db_name`/`role`/audit logs and has no `TEMP`; database ACL without `PUBLIC`.
+- **Error codes** (`tests/errors.rs`): every Problem has a `code`; specific codes for 403/409 and per-field codes in 422,
+  documented in the specification.
+- **Refresh cookie** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` sets `HttpOnly`/`SameSite=Strict` cookies and hides
+  the token from the body; rotation, reuse, logout and clearing the cookie; the cookie is ignored without the header.
 - **Access** (`tests/access.rs`): CRUD with 404/409/422/413 and concurrent duplicate e-mails; keyset pagination;
   permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored;
   inactive/401/403; self-service name and password; invalidation across two instances affecting only the right
@@ -406,7 +425,8 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
   others and returning an error; evicting a pool from the cache with a query in flight and LRU with capacity 2;
   idempotent bootstrap and validation mode.
 - **Documentation** (`tests/docs.rs` and `src/openapi.rs`): `/docs` and `/openapi.json` only exist with
-  `API_DOCS=true` and don't open up API routes; the specification covers exactly the router's routes, with security
+  `API_DOCS=true` and don't open up API routes; `api openapi` prints the same specification that is served; the
+  specification covers exactly the router's routes, with security
   and parameters consistent with each route's `Access`.
 
 ---

@@ -16,8 +16,8 @@ pub const PASSWORD_MAX: usize = 128;
 pub struct Validator(Vec<FieldError>);
 
 impl Validator {
-    pub fn err(&mut self, field: &'static str, message: &'static str) {
-        self.0.push(FieldError { field, message });
+    pub fn err(&mut self, field: &'static str, code: &'static str, message: &'static str) {
+        self.0.push(FieldError { field, code, message });
     }
 
     pub fn finish(self) -> Result<(), AppError> {
@@ -34,7 +34,11 @@ impl Validator {
             && !e.chars().any(|c| c.is_whitespace() || c.is_control())
             && matches!(e.split_once('@'), Some((l, d)) if !l.is_empty() && !d.is_empty() && !d.contains('@'));
         if !valid {
-            self.err(field, "must be a valid e-mail with at most 254 characters");
+            self.err(
+                field,
+                "invalid_email",
+                "must be a valid e-mail with at most 254 characters",
+            );
         }
         e
     }
@@ -43,7 +47,7 @@ impl Validator {
         let n = raw.trim().to_owned();
         let len = n.chars().count();
         if !(1..=NAME_MAX).contains(&len) || n.chars().any(char::is_control) {
-            self.err(field, "must have between 1 and 120 characters");
+            self.err(field, "invalid_length", "must have between 1 and 120 characters");
         }
         n
     }
@@ -51,7 +55,7 @@ impl Validator {
     pub fn password(&mut self, field: &'static str, raw: &str) {
         let len = raw.chars().count();
         if !(PASSWORD_MIN..=PASSWORD_MAX).contains(&len) {
-            self.err(field, "must have between 12 and 128 characters");
+            self.err(field, "invalid_length", "must have between 12 and 128 characters");
         }
     }
 }
@@ -86,7 +90,7 @@ pub fn page_limit(limit: Option<i64>) -> Result<i64, AppError> {
     match limit {
         None => Ok(50),
         Some(l) if (1..=100).contains(&l) => Ok(l),
-        Some(_) => Err(AppError::invalid("limit", "must be between 1 and 100")),
+        Some(_) => Err(AppError::invalid("limit", "out_of_range", "must be between 1 and 100")),
     }
 }
 

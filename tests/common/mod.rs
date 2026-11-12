@@ -107,6 +107,7 @@ impl Env {
             jwt_tenant_secret: Secret::new(self.jwt_tenant.clone()),
             access_ttl: Duration::from_secs(900),
             refresh_ttl: Duration::from_secs(30 * 24 * 3600),
+            auth_cookie_secure: true,
             control_pool_max: 4,
             tenant_pool_max: 4,
             max_open_tenant_pools: 10,
@@ -226,9 +227,20 @@ pub struct Resp {
     pub status: StatusCode,
     pub body: Value,
     pub content_type: Option<String>,
+    pub headers: axum::http::HeaderMap,
 }
 
 impl Resp {
+    /// Valor do header `Set-Cookie` cujo nome é `name` (ex.: `sc_platform_rt`).
+    pub fn set_cookie(&self, name: &str) -> Option<String> {
+        self.headers
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find(|v| v.starts_with(&format!("{name}=")))
+            .map(str::to_owned)
+    }
+
     pub fn id(&self) -> Uuid {
         self.body["id"]
             .as_str()
@@ -278,10 +290,15 @@ impl TestApp {
             None => req.body(Body::empty()),
         }
         .unwrap();
+        self.send(req).await
+    }
+
+    /// Envia uma requisição montada pelo teste (headers e corpo livres).
+    pub async fn send(&self, req: Request<Body>) -> Resp {
         let resp = self.router.clone().oneshot(req).await.unwrap();
         let status = resp.status();
-        let content_type = resp
-            .headers()
+        let headers = resp.headers().clone();
+        let content_type = headers
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
@@ -295,6 +312,7 @@ impl TestApp {
             status,
             body,
             content_type,
+            headers,
         }
     }
 

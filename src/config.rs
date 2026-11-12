@@ -184,6 +184,8 @@ pub struct ApiConfig {
     pub jwt_tenant_secret: Secret,
     pub access_ttl: Duration,
     pub refresh_ttl: Duration,
+    /// Atributo `Secure` do cookie de refresh (desligue só para HTTP fora de localhost).
+    pub auth_cookie_secure: bool,
     pub control_pool_max: u32,
     pub tenant_pool_max: u32,
     pub max_open_tenant_pools: u64,
@@ -218,6 +220,7 @@ impl ApiConfig {
             jwt_tenant_secret: Secret(env_req("JWT_TENANT_SECRET")?),
             access_ttl: Duration::from_secs(15 * 60),
             refresh_ttl: Duration::from_secs(30 * 24 * 3600),
+            auth_cookie_secure: env_bool("AUTH_COOKIE_SECURE", true)?,
             control_pool_max: env_parse("CONTROL_POOL_MAX_CONNECTIONS", 10u32)?,
             tenant_pool_max: env_parse("TENANT_POOL_MAX_CONNECTIONS", 10u32)?,
             max_open_tenant_pools: env_parse("MAX_OPEN_TENANT_POOLS", 50u64)?,

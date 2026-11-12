@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::access::catalog::Feature;
 use crate::access::resolver::{PlatformPrincipal, PlatformRole};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, reason};
 use crate::state::AppState;
 use crate::tenancy::middleware::{TenantCtx, resolve_tenant_ctx};
 
@@ -94,9 +94,7 @@ fn platform_claims(state: &AppState, headers: &HeaderMap) -> AppResult<crate::au
     let token = bearer(headers)?;
     match state.jwt.verify_platform(token) {
         Some(c) => Ok(c),
-        None if state.jwt.verify_tenant(token).is_some() => {
-            Err(AppError::Forbidden("tenant tokens cannot access platform routes"))
-        }
+        None if state.jwt.verify_tenant(token).is_some() => Err(AppError::Forbidden(reason::PLATFORM_TOKEN_REQUIRED)),
         None => Err(AppError::Unauthorized),
     }
 }
@@ -112,7 +110,7 @@ async fn owner_actor(state: &AppState, headers: &HeaderMap) -> AppResult<Platfor
             id: claims.sub,
             role: PlatformRole::Owner,
         }),
-        Some(r) if r.is_active => Err(AppError::Forbidden("owner only")),
+        Some(r) if r.is_active => Err(AppError::Forbidden(reason::OWNER_ONLY)),
         _ => Err(AppError::Unauthorized),
     }
 }
@@ -136,12 +134,12 @@ pub async fn enforce(
         Access::TenantToken | Access::Feature(_) | Access::SelfOr(_) => {
             let ctx = resolve_tenant_ctx(&state, req.headers(), access == Access::TenantToken).await?;
             match access {
-                Access::Feature(f) if !ctx.can(f) => return Err(AppError::Forbidden("missing feature")),
+                Access::Feature(f) if !ctx.can(f) => return Err(AppError::Forbidden(reason::MISSING_FEATURE)),
                 Access::SelfOr(f) if !ctx.can(f) => {
                     let id = params.iter().find(|(k, _)| *k == "id").map(|(_, v)| v);
                     let is_self = id.and_then(|v| Uuid::parse_str(v).ok()) == Some(ctx.actor_id());
                     if !is_self {
-                        return Err(AppError::Forbidden("missing feature"));
+                        return Err(AppError::Forbidden(reason::MISSING_FEATURE));
                     }
                 }
                 _ => {}

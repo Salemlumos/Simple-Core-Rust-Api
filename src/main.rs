@@ -1,4 +1,4 @@
-//! Binário único: `api <bootstrap|migrate|seed|serve|worker|healthcheck>`.
+//! Binário único: `api <bootstrap|migrate|seed|serve|worker|healthcheck|openapi>`.
 
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use simple_core::config::{ApiConfig, DbConfig};
 use simple_core::{app, cli, telemetry};
 
-const USAGE: &str = "uso: api <bootstrap|migrate|seed|serve|worker|healthcheck>";
+const USAGE: &str = "uso: api <bootstrap|migrate|seed|serve|worker|healthcheck|openapi>";
 
 fn main() -> ExitCode {
     let cmd = std::env::args().nth(1).unwrap_or_default();
@@ -24,6 +24,19 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if cmd == "openapi" {
+        // Sem logs: stdout é só a especificação (`make openapi`).
+        return match simple_core::openapi::spec_json() {
+            Ok(spec) => {
+                println!("{spec}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e:#}");
                 ExitCode::FAILURE
             }
         };

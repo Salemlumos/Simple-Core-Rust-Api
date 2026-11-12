@@ -135,6 +135,9 @@ Com `API_DOCS=true`, a API serve:
 O padrão é `false`: em produção nada disso é exposto e as rotas respondem 404. Os modelos `.env.docker.example` e
 `.env.local.example` ligam a opção; o `.env.external.example` a deixa desligada.
 
+Para obter a especificação sem subir a API nem o banco (por exemplo, para gerar um cliente), use `make openapi`
+(grava `openapi.json`; mude o caminho com `OPENAPI_OUT=...`) ou `api openapi > openapi.json`.
+
 **Testar pelo Swagger UI:**
 
 1. Abra `http://localhost:8080/docs`.
@@ -165,6 +168,13 @@ O padrão é `false`: em produção nada disso é exposto e as rotas respondem 4
   autorização e de métricas, e os arquivos estáticos já vêm embutidos no binário (feature `vendored`; o build não
   baixa nada). As rotas da API não passam por nenhum código novo.
 
+**Erros:** todo erro é `application/problem+json` (RFC 9457) com um campo `code` estável. Ele é o padrão do status
+(`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) ou um motivo específico de 403/409
+(`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; lista completa em
+`src/error.rs`). No 422, cada item de `errors` também traz `field` e `code` (`required`, `invalid_email`,
+`invalid_length`...). Clientes devem decidir e traduzir pelo `code`; `detail` e `message` são texto em inglês para
+pessoas e podem mudar.
+
 ---
 
 ## Variáveis de ambiente
@@ -184,6 +194,7 @@ Não existe `DATABASE_URL`: as conexões são montadas por banco (`control` ou `
 | `API_PORT` | porta publicada no host pelo Compose | 8080 |
 | `METRICS_BIND`, `WORKER_METRICS_BIND` | `/metrics` em porta interna (não publicada por padrão) | `127.0.0.1:9090` / `:9091` |
 | `API_DOCS` | serve Swagger UI em `/docs` e a especificação em `/openapi.json` | `false` |
+| `AUTH_COOKIE_SECURE` | atributo `Secure` do cookie de refresh (desligue só para HTTP sem TLS fora de `localhost`) | `true` |
 | `JWT_PLATFORM_SECRET`, `JWT_TENANT_SECRET` | segredos distintos, ≥ 32 bytes | — |
 | `JWT_ISSUER` | `iss` dos tokens | `simple-core` |
 | `API_INSTANCES`, `MAX_OPEN_TENANT_POOLS`, `TENANT_POOL_MAX_CONNECTIONS`, `CONTROL_POOL_MAX_CONNECTIONS`, `PG_CONNECTION_RESERVE` | orçamento de conexões (abaixo) | 1 / 50 / 10 / 10 / 10 |
@@ -335,6 +346,10 @@ tenant em rota de plataforma.
   plataforma (`simple-core:platform`) e tenant (`simple-core:tenant`). Sem papel nem permissões no token.
 - Refresh tokens opacos de 256 bits, guardados como SHA-256, 30 dias, rotacionados a cada uso; reuso de token revogado
   revoga todas as sessões do usuário. Troca de senha e desativação também revogam as sessões.
+- Clientes de navegador enviam `X-Auth-Mode: cookie`: login e refresh gravam o refresh token em um cookie `HttpOnly;
+  Secure; SameSite=Strict` (`sc_platform_rt` em `/v1/platform/auth`, `sc_tenant_rt` em `/v1/auth`) em vez do corpo, e
+  refresh e logout o leem de lá. O header obrigatório também bloqueia CSRF (a API não libera CORS). Uma sessão de
+  tenant por navegador: logar em outro tenant substitui o cookie.
 - Logins: mesmo 401 para tenant inexistente, e-mail inexistente, senha errada e conta inativa, sempre executando
   Argon2id (hash fictício quando não há usuário).
 - Rate limit de login por escopo (plataforma ou tenant), IP e e-mail, em janela fixa (`moka` com TTL) → 429.
@@ -390,6 +405,10 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
   B (inclusive com outro `X-Tenant-Slug` e refresh); admin restrito ao próprio tenant; suspensão rápida e reativação
   nas duas instâncias; `app_runtime` sem DDL, `CREATE DATABASE`, alteração de `db_name`/`role`/auditorias e sem `TEMP`;
   ACL do banco sem `PUBLIC`.
+- **Códigos de erro** (`tests/errors.rs`): todo Problem tem `code`; códigos específicos em 403/409 e por campo no 422,
+  documentados na especificação.
+- **Cookie de refresh** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` grava cookies `HttpOnly`/`SameSite=Strict` e
+  tira o token do corpo; rotação, reuso, logout e limpeza do cookie; sem o header, o cookie é ignorado.
 - **Acesso** (`tests/access.rs`): CRUD com 404/409/422/413 e e-mails duplicados concorrentes; paginação keyset;
   permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; inativo/401/403;
   autoatendimento de nome e senha; invalidação entre duas instâncias afetando só o tenant certo; proteções contra
@@ -400,8 +419,8 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
   erro; remoção de pool do cache com consulta em andamento e LRU com capacidade 2; bootstrap idempotente e modo de
   validação.
 - **Documentação** (`tests/docs.rs` e `src/openapi.rs`): `/docs` e `/openapi.json` só existem com `API_DOCS=true` e
-  não liberam as rotas da API; a especificação cobre exatamente as rotas do roteador, com segurança e parâmetros
-  coerentes com o `Access` de cada uma.
+  não liberam as rotas da API; `api openapi` imprime a mesma especificação servida; a especificação cobre exatamente
+  as rotas do roteador, com segurança e parâmetros coerentes com o `Access` de cada uma.
 
 ---
 
