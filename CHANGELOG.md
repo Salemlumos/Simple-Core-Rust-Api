@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/Salemlumos/Simple-Core-Rust-Api/compare/v0.1.0...v0.2.0) (2026-11-12)
+
+
+### Features
+
+* **auth:** refresh token em cookie HttpOnly com X-Auth-Mode: cookie ([cc25003](https://github.com/Salemlumos/Simple-Core-Rust-Api/commit/cc25003cf01297a422e4880d50fd62526f2a1e8b))
+* **cli:** api openapi e make openapi exportam a especificação ([898f5b4](https://github.com/Salemlumos/Simple-Core-Rust-Api/commit/898f5b48d1b3a841e8ffa052bf7d28f83c374f0e))
+* **error:** código estável em todo Problem e em cada erro de campo ([a75b060](https://github.com/Salemlumos/Simple-Core-Rust-Api/commit/a75b0607ab7ac48280aa28597a900bfd422c7ded))
+
 ## 0.1.0 (2026-11-11)
 
 
