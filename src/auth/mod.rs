@@ -58,8 +58,9 @@ impl axum::extract::FromRequestParts<AppState> for ClientIp {
 
 /// Se `peer` não é proxy confiável, devolve `peer`. Senão percorre `X-Forwarded-For` da direita
 /// para a esquerda e devolve o primeiro IP não confiável; entrada que não é IP devolve `peer`;
-/// se todos forem confiáveis, o mais à esquerda.
+/// se todos forem confiáveis, o mais à esquerda. Endereços IPv4-mapeados (`::ffff:a.b.c.d`) são normalizados para IPv4.
 pub fn client_ip(peer: IpAddr, forwarded_for: Option<&str>, trusted: &[IpNet]) -> IpAddr {
+    let peer = peer.to_canonical();
     let is_trusted = |ip: &IpAddr| trusted.iter().any(|n| n.contains(ip));
     if !is_trusted(&peer) {
         return peer;
@@ -72,6 +73,7 @@ pub fn client_ip(peer: IpAddr, forwarded_for: Option<&str>, trusted: &[IpNet]) -
         let Ok(ip) = part.trim().parse::<IpAddr>() else {
             return peer;
         };
+        let ip = ip.to_canonical();
         if !is_trusted(&ip) {
             return ip;
         }
@@ -105,6 +107,9 @@ mod tests {
             ("10.0.0.2", Some("2001:db8::1"), "2001:db8::1"),
             ("10.0.0.2", Some("10.0.0.7, 10.0.0.5"), "10.0.0.7"),
             ("10.0.0.2", Some("9.9.9.9, lixo"), "10.0.0.2"),
+            ("::ffff:10.0.0.2", Some("1.2.3.4"), "1.2.3.4"),
+            ("10.0.0.2", Some("::ffff:1.2.3.4"), "1.2.3.4"),
+            ("10.0.0.2", Some("::ffff:10.0.0.5"), "10.0.0.5"),
         ];
         for (peer, xff, want) in cases {
             assert_eq!(client_ip(ip(peer), xff, &t), ip(want), "peer={peer} xff={xff:?}");
