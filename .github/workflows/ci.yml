@@ -43,5 +43,7 @@ jobs:
       - run: make fmt
       - run: make lint
       - run: make db-up
+      - name: Bootstrap das roles (evita corrida entre os testes num cluster novo)
+        run: bash scripts/with-env.sh .env.local cargo run --locked -- bootstrap
       - run: make sqlx-check
       - run: make test
