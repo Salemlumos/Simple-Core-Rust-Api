@@ -4,7 +4,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/web-backend-prereqs] # TEMP
   pull_request:
 
 permissions:
