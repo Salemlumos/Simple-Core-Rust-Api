@@ -73,6 +73,10 @@ fn refresh_and_logout_bodies_are_optional() {
     ] {
         let body = &spec["paths"][path]["post"]["requestBody"];
         assert!(body.is_object(), "{path} sem requestBody");
-        assert_ne!(body["required"], serde_json::Value::Bool(true), "{path}: corpo obrigatório");
+        assert_ne!(
+            body["required"],
+            serde_json::Value::Bool(true),
+            "{path}: corpo obrigatório"
+        );
     }
 }

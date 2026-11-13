@@ -247,12 +247,7 @@ pub fn problem(status: StatusCode, detail: Option<&str>, errors: Option<&[FieldE
     problem_with_code(status, status_code(status), detail, errors)
 }
 
-fn problem_with_code(
-    status: StatusCode,
-    code: &str,
-    detail: Option<&str>,
-    errors: Option<&[FieldError]>,
-) -> Response {
+fn problem_with_code(status: StatusCode, code: &str, detail: Option<&str>, errors: Option<&[FieldError]>) -> Response {
     let body = Problem {
         kind: "about:blank",
         title: status.canonical_reason().unwrap_or("Error"),
