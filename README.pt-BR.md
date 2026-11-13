@@ -411,7 +411,7 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
 - **Cookie de refresh** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` grava cookies `HttpOnly`/`SameSite=Strict` e
   tira o token do corpo; rotação, reuso, logout e limpeza do cookie; sem o header, o cookie é ignorado.
 - **Acesso** (`tests/access.rs`): CRUD com 404/409/422/413 e e-mails duplicados concorrentes; paginação keyset;
-  permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; inativo/401/403;
+  permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; origem de cada permissão (perfil, allow, admin, deny); inativo/401/403;
   autoatendimento de nome e senha; invalidação entre duas instâncias afetando só o tenant certo; proteções contra
   escalada; corrida no último admin; rotação e reuso de refresh token; catálogo, perfis e auditoria.
 - **Operação** (`tests/operation.rs`): seed executado duas vezes e quatro em paralelo (um owner, uma base, senha e OID

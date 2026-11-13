@@ -4,7 +4,7 @@
 //! não altera os próprios perfis/exceções, e admins só são alterados por
 //! usuários de plataforma.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::Json;
 use axum::extract::State;
@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::catalog::{Feature, FeatureSet};
+use super::catalog::{FEATURES, Feature, FeatureSet};
 use super::repository::{self as repo, NewOverride, OverrideOut, ProfileOut, ProfileRef, audit};
 use super::resolver;
 use crate::auth::middleware::Tenant;
@@ -283,6 +283,67 @@ pub struct UserAccess {
     /// Resultado final: (perfis + allows) - denys. Admins recebem todas.
     #[schema(value_type = Vec<String>)]
     pub effective_features: Vec<&'static str>,
+    /// Origem de cada permissão, ordenada pelo código da feature.
+    pub sources: Vec<FeatureSource>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct FeatureSource {
+    pub feature: String,
+    /// Igual a estar em `effective_features`.
+    pub effective: bool,
+    /// O que concede a feature.
+    pub granted_by: Vec<Grant>,
+    /// Há um `deny` válido (deny sempre vence).
+    pub denied: bool,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Grant {
+    Profile {
+        profile_id: Uuid,
+    },
+    Allow,
+    /// Admin do tenant: acesso total.
+    Admin,
+}
+
+/// Monta as origens por feature. Admin: todo o catálogo, concedido por `Admin`.
+fn build_sources(rows: Vec<resolver::SourceRow>, is_admin: bool, effective: FeatureSet) -> Vec<FeatureSource> {
+    let mut by_feature: BTreeMap<String, FeatureSource> = BTreeMap::new();
+    if is_admin {
+        for f in FEATURES {
+            by_feature.insert(
+                f.code.to_owned(),
+                FeatureSource {
+                    feature: f.code.to_owned(),
+                    effective: effective.contains(f.feature),
+                    granted_by: vec![Grant::Admin],
+                    denied: false,
+                },
+            );
+        }
+        return by_feature.into_values().collect();
+    }
+    for r in rows {
+        let Some(feature) = Feature::from_code(&r.feature) else {
+            continue;
+        };
+        let s = by_feature.entry(r.feature.clone()).or_insert_with(|| FeatureSource {
+            feature: r.feature.clone(),
+            effective: effective.contains(feature),
+            granted_by: Vec::new(),
+            denied: false,
+        });
+        match (r.kind.as_str(), r.profile_id) {
+            ("profile", Some(profile_id)) => s.granted_by.push(Grant::Profile { profile_id }),
+            ("allow", _) => s.granted_by.push(Grant::Allow),
+            ("deny", _) => s.denied = true,
+            _ => {}
+        }
+    }
+    by_feature.into_values().collect()
 }
 
 /// Perfis, exceções e features efetivas de um usuário.
@@ -291,10 +352,11 @@ pub struct UserAccess {
     responses((status = 200, description = "Acesso do usuário", body = UserAccess)))]
 pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> AppResult<Json<UserAccess>> {
     let user = users_repo::get(ctx.db(), id).await?.ok_or(AppError::NotFound)?;
-    let (profiles, overrides, features) = tokio::try_join!(
+    let (profiles, overrides, features, rows) = tokio::try_join!(
         repo::user_profiles(ctx.db(), id),
         repo::user_overrides(ctx.db(), id),
         resolver::effective_features(ctx.db(), id),
+        resolver::feature_sources(ctx.db(), id),
     )?;
     let effective = if !user.is_active {
         FeatureSet::empty()
@@ -303,6 +365,7 @@ pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> App
     } else {
         features
     };
+    let sources = build_sources(rows, user.is_tenant_admin, effective);
     Ok(Json(UserAccess {
         user_id: id,
         is_tenant_admin: user.is_tenant_admin,
@@ -310,6 +373,7 @@ pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> App
         profiles,
         overrides,
         effective_features: effective.codes(),
+        sources,
     }))
 }
 

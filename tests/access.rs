@@ -813,3 +813,133 @@ impl CreateStatus for TestApp {
         .status
     }
 }
+
+fn source<'a>(body: &'a serde_json::Value, feature: &str) -> Option<&'a serde_json::Value> {
+    body["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["feature"] == feature)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn access_lists_sources_per_feature() {
+    let w = World::new().await;
+    let app = &w.app;
+    let p = app
+        .create_profile(w.admin(), "readers", &["users.read", "users.create"])
+        .await;
+    let uid = app.create_user(w.admin(), "u@x.io").await;
+    assert_eq!(app.set_profiles(w.admin(), uid, &[p]).await.status, StatusCode::OK);
+    for (code, effect) in [("access.read", "allow"), ("users.create", "deny")] {
+        let r = app
+            .put(
+                &format!("/v1/users/{uid}/overrides/{code}"),
+                w.admin(),
+                json!({ "effect": effect, "reason": "teste" }),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    }
+    let r = app.get(&format!("/v1/users/{uid}/access"), w.admin()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let codes: Vec<_> = r.body["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["feature"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["access.read", "users.create", "users.read"]);
+    assert_eq!(
+        source(&r.body, "users.read").unwrap(),
+        &json!({ "feature": "users.read", "effective": true,
+                 "granted_by": [{ "kind": "profile", "profile_id": p }], "denied": false })
+    );
+    assert_eq!(
+        source(&r.body, "users.create").unwrap(),
+        &json!({ "feature": "users.create", "effective": false,
+                 "granted_by": [{ "kind": "profile", "profile_id": p }], "denied": true })
+    );
+    assert_eq!(
+        source(&r.body, "access.read").unwrap(),
+        &json!({ "feature": "access.read", "effective": true,
+                 "granted_by": [{ "kind": "allow" }], "denied": false })
+    );
+    w.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admin_sources_are_admin() {
+    let w = World::new().await;
+    let app = &w.app;
+    let r = app.get(&format!("/v1/users/{}/access", w.admin_id), w.admin()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let sources = r.body["sources"].as_array().unwrap();
+    let catalog: usize = app
+        .get("/v1/modules", w.admin())
+        .await
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["features"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(sources.len(), catalog);
+    for s in sources {
+        assert_eq!(s["effective"], true, "{s}");
+        assert!(
+            s["granted_by"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({ "kind": "admin" })),
+            "{s}"
+        );
+    }
+    w.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sources_ignore_expired_overrides() {
+    let w = World::new().await;
+    let app = &w.app;
+    let uid = app.create_user(w.admin(), "u@x.io").await;
+    let db = w.env.db_name(w.tenant).await;
+    let mut conn = w.env.migrator(&db).await;
+    for effect in ["allow", "deny"] {
+        sqlx::query(
+            "INSERT INTO user_feature_overrides (user_id, feature_id, effect, reason, expires_at, created_by, created_by_type)
+             SELECT $1, id, $2, 'old', now() - interval '1 minute', $1, 'tenant' FROM features
+             WHERE code = CASE $2 WHEN 'allow' THEN 'users.delete' ELSE 'users.update' END",
+        )
+        .bind(uid)
+        .bind(effect)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    }
+    let r = app.get(&format!("/v1/users/{uid}/access"), w.admin()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(
+        r.body["sources"].as_array().unwrap().is_empty(),
+        "{:?}",
+        r.body["sources"]
+    );
+    w.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inactive_user_has_no_effective_features() {
+    let w = World::new().await;
+    let app = &w.app;
+    let (uid, _) = app.user_with(w.admin(), SEED_SLUG, "u@x.io", &["users.read"]).await;
+    let r = app
+        .patch(&format!("/v1/users/{uid}"), w.admin(), json!({ "is_active": false }))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = app.get(&format!("/v1/users/{uid}/access"), w.admin()).await;
+    assert_eq!(r.body["effective_features"], json!([]));
+    let s = source(&r.body, "users.read").unwrap();
+    assert_eq!(s["effective"], false);
+    assert_eq!(s["granted_by"].as_array().unwrap().len(), 1);
+    w.cleanup().await;
+}

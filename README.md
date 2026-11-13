@@ -417,7 +417,7 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
 - **Refresh cookie** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` sets `HttpOnly`/`SameSite=Strict` cookies and hides
   the token from the body; rotation, reuse, logout and clearing the cookie; the cookie is ignored without the header.
 - **Access** (`tests/access.rs`): CRUD with 404/409/422/413 and concurrent duplicate e-mails; keyset pagination;
-  permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored;
+  permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored; per-feature sources (profile, allow, admin, deny);
   inactive/401/403; self-service name and password; invalidation across two instances affecting only the right
   tenant; escalation protections; last-admin race; refresh token rotation and reuse; catalog, profiles and audit.
 - **Operations** (`tests/operation.rs`): seed run twice and four times in parallel (one owner, one tenant, password
