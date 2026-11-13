@@ -169,9 +169,9 @@ To get the specification without running the API or a database (e.g. to generate
 
 **Errors:** every error is `application/problem+json` (RFC 9457) with a stable `code` field. It is either the default
 for the status (`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) or a specific 403/409
-reason (`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; full list in
-`src/error.rs`). In a 422, each item of `errors` also has `field` and `code` (`required`, `invalid_email`,
-`invalid_length`...). Clients should branch and translate on `code`; `detail` and `message` are English text for
+reason (`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...). In a 422, each item of `errors` also has `field` and `code`
+(`required`, `invalid_email`, `invalid_length`...). The complete lists are the `enum` of `Problem.code` and `FieldError.code` in the specification
+(`make openapi`). Clients should branch and translate on `code`; `detail` and `message` are English text for
 humans and may change.
 
 ---
@@ -200,6 +200,7 @@ There is no `DATABASE_URL`: connections are built per database (`control` or `te
 | `ACCESS_CACHE_CAPACITY`, `PLATFORM_CACHE_CAPACITY`, `TENANT_REGISTRY_CAPACITY` | cache capacities | 200000 / 10000 / 10000 |
 | `PASSWORD_HASH_CONCURRENCY` | Argon2id semaphore permits | number of cores |
 | `LOGIN_RATE_*`, `LOGIN_RATE_WINDOW_SECONDS` | login limits (platform must be stricter) | tenant 60/IP and 10/e-mail, platform 20 and 5, per 60 s |
+| `TRUSTED_PROXIES` | comma-separated IPs/CIDRs of proxies whose `X-Forwarded-For` is trusted for the client IP (e.g. the front-end Nginx) | empty (peer address only) |
 | `MIGRATE_CONCURRENCY` | tenants migrated in parallel | 4 |
 | `SEED_OWNER_EMAIL`, `SEED_OWNER_NAME`, `SEED_OWNER_PASSWORD` (≥ 16), `SEED_TENANT_SLUG`, `SEED_TENANT_NAME` | seed, no defaults | — |
 | `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_SHARED_BUFFERS`, `DB_PUBLISH_PORT` | PostgreSQL container (the default of 1150 covers 110 pools × 10 connections) | 1150 / 1GB / 5433 |
@@ -357,7 +358,7 @@ owner route and 403 for a tenant token on a platform route.
   session per browser: logging into another tenant replaces the cookie.
 - Logins: the same 401 for a nonexistent tenant, nonexistent e-mail, wrong password and inactive account, always
   running Argon2id (with a dummy hash when there is no user).
-- Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429.
+- Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429 with `Retry-After`. The client IP is the TCP peer, or the `X-Forwarded-For` address when the peer is in `TRUSTED_PROXIES`.
 
 ### Performance and resilience
 
@@ -400,8 +401,11 @@ make test          # or: cargo test (reads .env.local if DB_HOST is not set)
 make fmt lint sqlx-check
 ```
 
+The GitHub Actions workflow `.github/workflows/ci.yml` runs these same targets (`fmt`, `lint`, `db-up`, `sqlx-check`,
+`test`) on every pull request and push to `main`, with a throwaway `.env.local` generated from `.env.local.example`.
+
 Each integration test creates its own `control` (`test_<uuid>`) and tenants on a real PostgreSQL, so tests run in
-parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 30 integration):
+parallel; the databases are dropped at the end. Coverage (76 tests: 23 unit and 53 integration):
 
 - **Platform** (`tests/platform.rs`): only the owner creates tenants/superusers/admins (superuser, admin and regular
   user → 403); a superuser can enter every tenant but can't change `is_tenant_admin`; nobody creates, changes or
@@ -415,8 +419,10 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
   documented in the specification.
 - **Refresh cookie** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` sets `HttpOnly`/`SameSite=Strict` cookies and hides
   the token from the body; rotation, reuse, logout and clearing the cookie; the cookie is ignored without the header.
+- **Login limits** (`tests/auth_limits.rs`): a rate-limited login returns `429` with `Retry-After` within the window;
+  `X-Forwarded-For` is only honored when the peer is in `TRUSTED_PROXIES`, and a forged header is ignored.
 - **Access** (`tests/access.rs`): CRUD with 404/409/422/413 and concurrent duplicate e-mails; keyset pagination;
-  permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored;
+  permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored; per-feature sources (profile, allow, admin, deny);
   inactive/401/403; self-service name and password; invalidation across two instances affecting only the right
   tenant; escalation protections; last-admin race; refresh token rotation and reuse; catalog, profiles and audit.
 - **Operations** (`tests/operation.rs`): seed run twice and four times in parallel (one owner, one tenant, password

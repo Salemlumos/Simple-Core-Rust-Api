@@ -14,14 +14,14 @@ use axum::Router;
 use axum::http::Method;
 use utoipa::openapi::path::{Operation, ParameterBuilder, ParameterIn, PathItem};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityRequirement, SecurityScheme};
-use utoipa::openapi::{ContentBuilder, ObjectBuilder, Ref, Required, ResponseBuilder, Type};
+use utoipa::openapi::{ContentBuilder, ObjectBuilder, Ref, RefOr, Required, ResponseBuilder, Schema, Type};
 use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::access::handlers as access;
 use crate::auth::handlers as auth;
 use crate::auth::middleware::Access;
-use crate::error::FieldError;
+use crate::error::{FieldError, field, problem_codes};
 use crate::platform::handlers as platform;
 use crate::tenancy::middleware::TENANT_HEADER;
 use crate::users::handlers as users;
@@ -121,7 +121,7 @@ pub struct Health {
         access::delete_override,
     ),
     components(schemas(Problem, FieldError)),
-    modifiers(&AccessRules),
+    modifiers(&AccessRules, &ErrorCodes),
     tags(
         (name = "saúde", description = "Health checks (sem autenticação)"),
         (name = "autenticação", description = "Login, refresh e logout de usuários de tenant"),
@@ -146,6 +146,29 @@ pub fn spec_json() -> anyhow::Result<String> {
 /// Swagger UI em [`DOCS_PATH`] e a especificação em [`SPEC_PATH`].
 pub fn docs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     SwaggerUi::new(DOCS_PATH).url(SPEC_PATH, ApiDoc::openapi()).into()
+}
+
+/// Fecha `Problem.code` e `FieldError.code` como `enum` com todos os códigos possíveis.
+struct ErrorCodes;
+
+impl Modify for ErrorCodes {
+    fn modify(&self, api: &mut utoipa::openapi::OpenApi) {
+        let components = api.components.get_or_insert_with(Default::default);
+        let problem = problem_codes().into_iter().map(str::to_owned).collect();
+        let field = field::ALL.iter().map(|c| c.as_str().to_owned()).collect();
+        set_code_enum(components, "Problem", problem);
+        set_code_enum(components, "FieldError", field);
+    }
+}
+
+fn set_code_enum(components: &mut utoipa::openapi::Components, schema: &str, values: Vec<String>) {
+    let Some(RefOr::T(Schema::Object(obj))) = components.schemas.get_mut(schema) else {
+        panic!("schema {schema} ausente ou não é objeto");
+    };
+    let Some(RefOr::T(Schema::Object(code))) = obj.properties.get_mut("code") else {
+        panic!("{schema}.code ausente ou não é objeto");
+    };
+    code.enum_values = Some(values.into_iter().map(Into::into).collect());
 }
 
 /// Aplica segurança, `X-Tenant-Slug` e respostas de erro comuns conforme o
@@ -325,7 +348,6 @@ fn problem_response(description: &str) -> utoipa::openapi::RefOr<utoipa::openapi
 mod tests {
     use std::collections::BTreeSet;
 
-    use utoipa::openapi::RefOr;
     use utoipa::openapi::path::{Operation, PathItem};
 
     use super::*;

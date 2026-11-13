@@ -13,7 +13,7 @@ use super::repository::{self as repo, PlatformUserOut, TenantOut};
 use crate::access::repository::audit_as;
 use crate::auth::middleware::Platform;
 use crate::db::{is_unique_violation, is_valid_slug, tenant_db_name};
-use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, reason};
+use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, field, reason};
 use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 use crate::tenancy::registry::{TenantInfo, TenantStatus};
@@ -60,13 +60,17 @@ pub async fn patch_me(
     if let Some(p) = &b.password {
         v.password("password", p);
         if b.current_password.is_none() {
-            v.err("current_password", "required", "required to change your password");
+            v.err("current_password", field::REQUIRED, "required to change your password");
         }
     } else if b.current_password.is_some() {
-        v.err("current_password", "not_allowed", "only allowed together with password");
+        v.err(
+            "current_password",
+            field::NOT_ALLOWED,
+            "only allowed together with password",
+        );
     }
     if b.name.is_none() && b.password.is_none() {
-        v.err("body", "no_changes", "no fields to update");
+        v.err("body", field::NO_CHANGES, "no fields to update");
     }
     v.finish()?;
     let hash = match (b.password, b.current_password) {
@@ -155,7 +159,7 @@ pub async fn create_tenant(
     if !is_valid_slug(&b.slug) {
         v.err(
             "slug",
-            "invalid_format",
+            field::INVALID_FORMAT,
             "must match ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
         );
     }
@@ -220,10 +224,10 @@ pub async fn patch_tenant(
         && s != "active"
         && s != "suspended"
     {
-        v.err("status", "invalid_choice", "must be active or suspended");
+        v.err("status", field::INVALID_CHOICE, "must be active or suspended");
     }
     if b.name.is_none() && b.status.is_none() {
-        v.err("body", "no_changes", "no fields to update");
+        v.err("body", field::NO_CHANGES, "no fields to update");
     }
     v.finish()?;
     let mut tx = st.control.begin().await?;
@@ -361,7 +365,7 @@ pub async fn patch_superuser(
         v.password("password", p);
     }
     if b.name.is_none() && b.password.is_none() && b.is_active.is_none() {
-        v.err("body", "no_changes", "no fields to update");
+        v.err("body", field::NO_CHANGES, "no fields to update");
     }
     v.finish()?;
     let hash = match b.password {

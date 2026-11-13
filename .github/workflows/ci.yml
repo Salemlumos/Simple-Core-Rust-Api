@@ -1,0 +1,49 @@
+# Testes da API: formatação, clippy, cache offline do sqlx e testes com PostgreSQL real.
+# Os mesmos alvos do Makefile que se roda localmente (make fmt lint db-up sqlx-check test).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust estável
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: sqlx-cli
+        run: cargo install sqlx-cli --version '^0.9' --no-default-features --features postgres --locked
+      - name: Gera .env.local de teste
+        run: |
+          # Preenche cada senha/segredo vazio com um valor aleatório e os SEED_* com valores de teste.
+          while IFS= read -r line; do
+            case "$line" in
+              SEED_OWNER_EMAIL=) line="SEED_OWNER_EMAIL=ci@example.com" ;;
+              SEED_OWNER_NAME=) line="SEED_OWNER_NAME=CI" ;;
+              SEED_TENANT_SLUG=) line="SEED_TENANT_SLUG=ci" ;;
+              SEED_TENANT_NAME=) line="SEED_TENANT_NAME=CI" ;;
+              *PASSWORD=* | *SECRET=*)
+                [ "${line#*=}" = "" ] && line="${line}$(openssl rand -hex 32)"
+                ;;
+            esac
+            printf '%s\n' "$line"
+          done < .env.local.example > .env.local
+      - run: make fmt
+      - run: make lint
+      - run: make db-up
+      - name: Bootstrap das roles (evita corrida entre os testes num cluster novo)
+        run: bash scripts/with-env.sh .env.local cargo run --locked -- bootstrap
+      - run: make sqlx-check
+      - run: make test

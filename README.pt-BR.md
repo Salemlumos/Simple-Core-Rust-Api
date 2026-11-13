@@ -170,9 +170,9 @@ Para obter a especificação sem subir a API nem o banco (por exemplo, para gera
 
 **Erros:** todo erro é `application/problem+json` (RFC 9457) com um campo `code` estável. Ele é o padrão do status
 (`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) ou um motivo específico de 403/409
-(`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; lista completa em
-`src/error.rs`). No 422, cada item de `errors` também traz `field` e `code` (`required`, `invalid_email`,
-`invalid_length`...). Clientes devem decidir e traduzir pelo `code`; `detail` e `message` são texto em inglês para
+(`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...). No 422, cada item de `errors` também traz `field` e `code`
+(`required`, `invalid_email`, `invalid_length`...). As listas completas estão no `enum` de `Problem.code` e `FieldError.code` na especificação
+(`make openapi`). Clientes devem decidir e traduzir pelo `code`; `detail` e `message` são texto em inglês para
 pessoas e podem mudar.
 
 ---
@@ -201,6 +201,7 @@ Não existe `DATABASE_URL`: as conexões são montadas por banco (`control` ou `
 | `ACCESS_CACHE_CAPACITY`, `PLATFORM_CACHE_CAPACITY`, `TENANT_REGISTRY_CAPACITY` | capacidade dos caches | 200000 / 10000 / 10000 |
 | `PASSWORD_HASH_CONCURRENCY` | vagas do semáforo do Argon2id | nº de núcleos |
 | `LOGIN_RATE_*`, `LOGIN_RATE_WINDOW_SECONDS` | limites de login (plataforma precisa ser mais restritiva) | tenant 60/IP e 10/e-mail, plataforma 20 e 5, por 60 s |
+| `TRUSTED_PROXIES` | IPs/CIDRs separados por vírgula de proxies cujo `X-Forwarded-For` é confiável para o IP do cliente (ex.: o Nginx do front) | vazio (só o endereço do par) |
 | `MIGRATE_CONCURRENCY` | tenants migrados em paralelo | 4 |
 | `SEED_OWNER_EMAIL`, `SEED_OWNER_NAME`, `SEED_OWNER_PASSWORD` (≥ 16), `SEED_TENANT_SLUG`, `SEED_TENANT_NAME` | seed, sem padrão | — |
 | `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_SHARED_BUFFERS`, `DB_PUBLISH_PORT` | container do PostgreSQL (o padrão de 1150 cobre 110 pools × 10 conexões) | 1150 / 1GB / 5433 |
@@ -352,7 +353,7 @@ tenant em rota de plataforma.
   tenant por navegador: logar em outro tenant substitui o cookie.
 - Logins: mesmo 401 para tenant inexistente, e-mail inexistente, senha errada e conta inativa, sempre executando
   Argon2id (hash fictício quando não há usuário).
-- Rate limit de login por escopo (plataforma ou tenant), IP e e-mail, em janela fixa (`moka` com TTL) → 429.
+- Rate limit de login por escopo (plataforma ou tenant), IP e e-mail, em janela fixa (`moka` com TTL) → 429 com `Retry-After`. O IP do cliente é o par TCP, ou o endereço de `X-Forwarded-For` quando o par está em `TRUSTED_PROXIES`.
 
 ### Desempenho e resiliência
 
@@ -394,8 +395,11 @@ make test          # ou: cargo test (lê .env.local se DB_HOST não estiver defi
 make fmt lint sqlx-check
 ```
 
+O workflow do GitHub Actions `.github/workflows/ci.yml` roda esses mesmos alvos (`fmt`, `lint`, `db-up`, `sqlx-check`,
+`test`) em cada pull request e push na `main`, com um `.env.local` descartável gerado a partir de `.env.local.example`.
+
 Cada teste de integração cria o próprio `control` (`test_<uuid>`) e seus tenants num PostgreSQL real, então os testes
-rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 unitários e 30 de integração):
+rodam em paralelo; ao final os bancos são removidos. Cobertura (76 testes: 23 unitários e 53 de integração):
 
 - **Plataforma** (`tests/platform.rs`): só o owner cria tenants/superusuários/admins (superusuário, admin e usuário
   comum → 403); superusuário entra em todos os tenants mas não altera `is_tenant_admin`; ninguém cria, altera ou exclui
@@ -409,8 +413,10 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
   documentados na especificação.
 - **Cookie de refresh** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` grava cookies `HttpOnly`/`SameSite=Strict` e
   tira o token do corpo; rotação, reuso, logout e limpeza do cookie; sem o header, o cookie é ignorado.
+- **Limites de login** (`tests/auth_limits.rs`): login limitado devolve `429` com `Retry-After` dentro da janela;
+  `X-Forwarded-For` só vale quando o peer está em `TRUSTED_PROXIES`, e um header forjado é ignorado.
 - **Acesso** (`tests/access.rs`): CRUD com 404/409/422/413 e e-mails duplicados concorrentes; paginação keyset;
-  permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; inativo/401/403;
+  permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; origem de cada permissão (perfil, allow, admin, deny); inativo/401/403;
   autoatendimento de nome e senha; invalidação entre duas instâncias afetando só o tenant certo; proteções contra
   escalada; corrida no último admin; rotação e reuso de refresh token; catálogo, perfis e auditoria.
 - **Operação** (`tests/operation.rs`): seed executado duas vezes e quatro em paralelo (um owner, uma base, senha e OID

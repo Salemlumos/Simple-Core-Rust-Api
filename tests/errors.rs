@@ -168,3 +168,43 @@ async fn spec_documents_the_codes() {
         schemas["FieldError"]
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spec_lists_every_code_as_enum() {
+    let spec: serde_json::Value = serde_json::from_str(&simple_core::openapi::spec_json().unwrap()).unwrap();
+    let s = &spec["components"]["schemas"];
+    let problem: Vec<&str> = s["Problem"]["properties"]["code"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let field: Vec<&str> = s["FieldError"]["properties"]["code"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for c in [
+        "unauthorized",
+        "not_found",
+        "validation_failed",
+        "rate_limited",
+        "unavailable",
+        "missing_feature",
+        "cannot_grant",
+        "email_taken",
+        "last_tenant_admin",
+    ] {
+        assert!(problem.contains(&c), "{c} fora do enum de Problem.code");
+    }
+    for c in [
+        "required",
+        "invalid_email",
+        "invalid_length",
+        "invalid_body",
+        "out_of_range",
+    ] {
+        assert!(field.contains(&c), "{c} fora do enum de FieldError.code");
+    }
+}

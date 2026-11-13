@@ -4,7 +4,7 @@
 //! não altera os próprios perfis/exceções, e admins só são alterados por
 //! usuários de plataforma.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::Json;
 use axum::extract::State;
@@ -16,11 +16,11 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::catalog::{Feature, FeatureSet};
+use super::catalog::{FEATURES, Feature, FeatureSet};
 use super::repository::{self as repo, NewOverride, OverrideOut, ProfileOut, ProfileRef, audit};
 use super::resolver;
 use crate::auth::middleware::Tenant;
-use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, reason};
+use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, field, reason};
 use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 use crate::tenancy::middleware::TenantCtx;
@@ -61,12 +61,12 @@ pub async fn get_profile(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> App
 /// Valida códigos de feature contra o catálogo e devolve o conjunto.
 fn parse_features(codes: &[String]) -> AppResult<(Vec<String>, FeatureSet)> {
     if codes.len() > MAX_ITEMS {
-        return Err(AppError::invalid("features", "too_many", "too many features"));
+        return Err(AppError::invalid("features", field::TOO_MANY, "too many features"));
     }
     let mut set = FeatureSet::empty();
     let mut out = BTreeSet::new();
     for c in codes {
-        let f = Feature::from_code(c).ok_or(AppError::invalid("features", "unknown", "unknown feature code"))?;
+        let f = Feature::from_code(c).ok_or(AppError::invalid("features", field::UNKNOWN, "unknown feature code"))?;
         set.insert(f);
         out.insert(f.code().to_owned());
     }
@@ -83,7 +83,7 @@ fn ensure_grantable(ctx: &TenantCtx, set: FeatureSet) -> AppResult<()> {
 
 fn validate_description(v: &mut Validator, d: &str) {
     if d.chars().count() > 500 {
-        v.err("description", "too_long", "must have at most 500 characters");
+        v.err("description", field::TOO_LONG, "must have at most 500 characters");
     }
 }
 
@@ -172,7 +172,7 @@ pub async fn patch_profile(
         validate_description(&mut v, d);
     }
     if b.name.is_none() && b.description.is_none() {
-        v.err("body", "no_changes", "no fields to update");
+        v.err("body", field::NO_CHANGES, "no fields to update");
     }
     v.finish()?;
     let mut tx = ctx.db().begin().await?;
@@ -283,6 +283,67 @@ pub struct UserAccess {
     /// Resultado final: (perfis + allows) - denys. Admins recebem todas.
     #[schema(value_type = Vec<String>)]
     pub effective_features: Vec<&'static str>,
+    /// Origem de cada permissão, ordenada pelo código da feature.
+    pub sources: Vec<FeatureSource>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct FeatureSource {
+    pub feature: String,
+    /// Igual a estar em `effective_features`.
+    pub effective: bool,
+    /// O que concede a feature.
+    pub granted_by: Vec<Grant>,
+    /// Há um `deny` válido (deny sempre vence).
+    pub denied: bool,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Grant {
+    Profile {
+        profile_id: Uuid,
+    },
+    Allow,
+    /// Admin do tenant: acesso total.
+    Admin,
+}
+
+/// Monta as origens por feature. Admin: todo o catálogo, concedido por `Admin`.
+fn build_sources(rows: Vec<resolver::SourceRow>, is_admin: bool, effective: FeatureSet) -> Vec<FeatureSource> {
+    let mut by_feature: BTreeMap<String, FeatureSource> = BTreeMap::new();
+    if is_admin {
+        for f in FEATURES {
+            by_feature.insert(
+                f.code.to_owned(),
+                FeatureSource {
+                    feature: f.code.to_owned(),
+                    effective: effective.contains(f.feature),
+                    granted_by: vec![Grant::Admin],
+                    denied: false,
+                },
+            );
+        }
+        return by_feature.into_values().collect();
+    }
+    for r in rows {
+        let Some(feature) = Feature::from_code(&r.feature) else {
+            continue;
+        };
+        let s = by_feature.entry(r.feature.clone()).or_insert_with(|| FeatureSource {
+            feature: r.feature.clone(),
+            effective: effective.contains(feature),
+            granted_by: Vec::new(),
+            denied: false,
+        });
+        match (r.kind.as_str(), r.profile_id) {
+            ("profile", Some(profile_id)) => s.granted_by.push(Grant::Profile { profile_id }),
+            ("allow", _) => s.granted_by.push(Grant::Allow),
+            ("deny", _) => s.denied = true,
+            _ => {}
+        }
+    }
+    by_feature.into_values().collect()
 }
 
 /// Perfis, exceções e features efetivas de um usuário.
@@ -291,10 +352,11 @@ pub struct UserAccess {
     responses((status = 200, description = "Acesso do usuário", body = UserAccess)))]
 pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> AppResult<Json<UserAccess>> {
     let user = users_repo::get(ctx.db(), id).await?.ok_or(AppError::NotFound)?;
-    let (profiles, overrides, features) = tokio::try_join!(
+    let (profiles, overrides, features, rows) = tokio::try_join!(
         repo::user_profiles(ctx.db(), id),
         repo::user_overrides(ctx.db(), id),
         resolver::effective_features(ctx.db(), id),
+        resolver::feature_sources(ctx.db(), id),
     )?;
     let effective = if !user.is_active {
         FeatureSet::empty()
@@ -303,6 +365,7 @@ pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> App
     } else {
         features
     };
+    let sources = build_sources(rows, user.is_tenant_admin, effective);
     Ok(Json(UserAccess {
         user_id: id,
         is_tenant_admin: user.is_tenant_admin,
@@ -310,6 +373,7 @@ pub async fn user_access(Tenant(ctx): Tenant, ApiPath(id): ApiPath<Uuid>) -> App
         profiles,
         overrides,
         effective_features: effective.codes(),
+        sources,
     }))
 }
 
@@ -333,7 +397,7 @@ pub async fn put_user_profiles(
     ApiJson(b): ApiJson<PutProfiles>,
 ) -> AppResult<Json<Vec<ProfileRef>>> {
     if b.profile_ids.len() > MAX_ITEMS {
-        return Err(AppError::invalid("profile_ids", "too_many", "too many profiles"));
+        return Err(AppError::invalid("profile_ids", field::TOO_MANY, "too many profiles"));
     }
     let ids: Vec<Uuid> = b
         .profile_ids
@@ -346,7 +410,7 @@ pub async fn put_user_profiles(
     guard_manage_user(&ctx, &mut tx, id).await?;
     let added = repo::replace_user_profiles(&mut tx, id, &ids).await.map_err(|e| {
         if crate::db::is_fk_violation(&e) {
-            AppError::invalid("profile_ids", "unknown", "unknown profile")
+            AppError::invalid("profile_ids", field::UNKNOWN, "unknown profile")
         } else {
             e.into()
         }
@@ -403,14 +467,14 @@ pub async fn put_override(
     let feature = Feature::from_code(&code).ok_or(AppError::NotFound)?;
     let mut v = Validator::default();
     if b.effect != "allow" && b.effect != "deny" {
-        v.err("effect", "invalid_choice", "must be allow or deny");
+        v.err("effect", field::INVALID_CHOICE, "must be allow or deny");
     }
     let reason = b.reason.trim();
     if reason.is_empty() || reason.chars().count() > 500 {
-        v.err("reason", "invalid_length", "required, at most 500 characters");
+        v.err("reason", field::INVALID_LENGTH, "required, at most 500 characters");
     }
     if b.expires_at.is_some_and(|e| e <= OffsetDateTime::now_utc()) {
-        v.err("expires_at", "must_be_future", "must be in the future");
+        v.err("expires_at", field::MUST_BE_FUTURE, "must be in the future");
     }
     v.finish()?;
     if b.effect == "allow" && !ctx.grantable().contains(feature) {

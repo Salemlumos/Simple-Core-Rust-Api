@@ -116,6 +116,42 @@ where
     Ok(FeatureSet::from_codes(&codes))
 }
 
+/// Uma origem de permissão: perfil, `allow` ou `deny` válidos.
+#[derive(Debug, Clone)]
+pub struct SourceRow {
+    pub feature: String,
+    /// `profile`, `allow` ou `deny`.
+    pub kind: String,
+    pub profile_id: Option<Uuid>,
+}
+
+/// Origens das permissões (sem considerar admin), com a mesma regra de validade
+/// de `effective_features`.
+pub async fn feature_sources<'e, E>(exec: E, user_id: Uuid) -> Result<Vec<SourceRow>, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    sqlx::query_as!(
+        SourceRow,
+        r#"
+        SELECT f.code AS "feature!", 'profile' AS "kind!", up.profile_id AS "profile_id?"
+        FROM user_profiles up
+        JOIN profile_features pf ON pf.profile_id = up.profile_id
+        JOIN features f ON f.id = pf.feature_id
+        WHERE up.user_id = $1
+        UNION ALL
+        SELECT f.code, o.effect, NULL::uuid
+        FROM user_feature_overrides o
+        JOIN features f ON f.id = o.feature_id
+        WHERE o.user_id = $1 AND (o.expires_at IS NULL OR o.expires_at > now())
+        ORDER BY 1, 2, 3
+        "#,
+        user_id
+    )
+    .fetch_all(exec)
+    .await
+}
+
 pub async fn load_platform_principal(pool: &PgPool, id: Uuid) -> Result<Option<PlatformPrincipal>, sqlx::Error> {
     let row = sqlx::query!("SELECT role, is_active FROM platform_users WHERE id = $1", id)
         .fetch_optional(pool)

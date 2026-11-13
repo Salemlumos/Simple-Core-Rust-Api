@@ -13,7 +13,7 @@ use super::repository::{self as repo, NewUser, UserPatch};
 use crate::access::catalog::Feature;
 use crate::access::repository::audit;
 use crate::auth::middleware::Tenant;
-use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, reason};
+use crate::error::{ApiJson, ApiPath, ApiQuery, AppError, AppResult, field, reason};
 use crate::openapi::Problem;
 use crate::state::{AppState, Invalidation};
 
@@ -151,12 +151,12 @@ pub async fn patch(
         return Err(AppError::Forbidden(reason::MISSING_USERS_UPDATE));
     }
     if b.name.is_none() && b.email.is_none() && b.password.is_none() && b.is_active.is_none() {
-        return Err(AppError::invalid("body", "no_changes", "no fields to update"));
+        return Err(AppError::invalid("body", field::NO_CHANGES, "no fields to update"));
     }
     if b.current_password.is_some() && b.password.is_none() {
         return Err(AppError::invalid(
             "current_password",
-            "not_allowed",
+            field::NOT_ALLOWED,
             "only allowed together with password",
         ));
     }
@@ -167,7 +167,11 @@ pub async fn patch(
     if let Some(p) = &b.password {
         v.password("password", p);
         if is_self && b.current_password.is_none() {
-            v.err("current_password", "required", "required to change your own password");
+            v.err(
+                "current_password",
+                field::REQUIRED,
+                "required to change your own password",
+            );
         }
     }
     v.finish()?;

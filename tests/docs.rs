@@ -59,3 +59,24 @@ async fn docs_are_served_only_when_enabled() {
     drop(app);
     w.cleanup().await;
 }
+
+/// No modo cookie o front não envia corpo em refresh/logout: a especificação
+/// não pode marcá-lo como obrigatório.
+#[test]
+fn refresh_and_logout_bodies_are_optional() {
+    let spec: serde_json::Value = serde_json::from_str(&simple_core::openapi::spec_json().unwrap()).unwrap();
+    for path in [
+        "/v1/auth/refresh",
+        "/v1/auth/logout",
+        "/v1/platform/auth/refresh",
+        "/v1/platform/auth/logout",
+    ] {
+        let body = &spec["paths"][path]["post"]["requestBody"];
+        assert!(body.is_object(), "{path} sem requestBody");
+        assert_ne!(
+            body["required"],
+            serde_json::Value::Bool(true),
+            "{path}: corpo obrigatório"
+        );
+    }
+}
