@@ -405,7 +405,7 @@ The GitHub Actions workflow `.github/workflows/ci.yml` runs these same targets (
 `test`) on every pull request and push to `main`, with a throwaway `.env.local` generated from `.env.local.example`.
 
 Each integration test creates its own `control` (`test_<uuid>`) and tenants on a real PostgreSQL, so tests run in
-parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 30 integration):
+parallel; the databases are dropped at the end. Coverage (76 tests: 23 unit and 53 integration):
 
 - **Platform** (`tests/platform.rs`): only the owner creates tenants/superusers/admins (superuser, admin and regular
   user → 403); a superuser can enter every tenant but can't change `is_tenant_admin`; nobody creates, changes or
@@ -419,6 +419,8 @@ parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 
   documented in the specification.
 - **Refresh cookie** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` sets `HttpOnly`/`SameSite=Strict` cookies and hides
   the token from the body; rotation, reuse, logout and clearing the cookie; the cookie is ignored without the header.
+- **Login limits** (`tests/auth_limits.rs`): a rate-limited login returns `429` with `Retry-After` within the window;
+  `X-Forwarded-For` is only honored when the peer is in `TRUSTED_PROXIES`, and a forged header is ignored.
 - **Access** (`tests/access.rs`): CRUD with 404/409/422/413 and concurrent duplicate e-mails; keyset pagination;
   permissions from a profile, union of profiles and `allow`; `deny` wins and expired overrides are ignored; per-feature sources (profile, allow, admin, deny);
   inactive/401/403; self-service name and password; invalidation across two instances affecting only the right

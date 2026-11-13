@@ -399,7 +399,7 @@ O workflow do GitHub Actions `.github/workflows/ci.yml` roda esses mesmos alvos 
 `test`) em cada pull request e push na `main`, com um `.env.local` descartável gerado a partir de `.env.local.example`.
 
 Cada teste de integração cria o próprio `control` (`test_<uuid>`) e seus tenants num PostgreSQL real, então os testes
-rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 unitários e 30 de integração):
+rodam em paralelo; ao final os bancos são removidos. Cobertura (76 testes: 23 unitários e 53 de integração):
 
 - **Plataforma** (`tests/platform.rs`): só o owner cria tenants/superusuários/admins (superusuário, admin e usuário
   comum → 403); superusuário entra em todos os tenants mas não altera `is_tenant_admin`; ninguém cria, altera ou exclui
@@ -413,6 +413,8 @@ rodam em paralelo; ao final os bancos são removidos. Cobertura (43 testes: 13 u
   documentados na especificação.
 - **Cookie de refresh** (`tests/auth_cookie.rs`): `X-Auth-Mode: cookie` grava cookies `HttpOnly`/`SameSite=Strict` e
   tira o token do corpo; rotação, reuso, logout e limpeza do cookie; sem o header, o cookie é ignorado.
+- **Limites de login** (`tests/auth_limits.rs`): login limitado devolve `429` com `Retry-After` dentro da janela;
+  `X-Forwarded-For` só vale quando o peer está em `TRUSTED_PROXIES`, e um header forjado é ignorado.
 - **Acesso** (`tests/access.rs`): CRUD com 404/409/422/413 e e-mails duplicados concorrentes; paginação keyset;
   permissões por perfil, soma de perfis e `allow`; `deny` vencendo e exceções expiradas ignoradas; origem de cada permissão (perfil, allow, admin, deny); inativo/401/403;
   autoatendimento de nome e senha; invalidação entre duas instâncias afetando só o tenant certo; proteções contra
