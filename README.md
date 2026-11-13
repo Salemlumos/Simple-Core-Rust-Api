@@ -401,6 +401,9 @@ make test          # or: cargo test (reads .env.local if DB_HOST is not set)
 make fmt lint sqlx-check
 ```
 
+The GitHub Actions workflow `.github/workflows/ci.yml` runs these same targets (`fmt`, `lint`, `db-up`, `sqlx-check`,
+`test`) on every pull request and push to `main`, with a throwaway `.env.local` generated from `.env.local.example`.
+
 Each integration test creates its own `control` (`test_<uuid>`) and tenants on a real PostgreSQL, so tests run in
 parallel; the databases are dropped at the end. Coverage (43 tests: 13 unit and 30 integration):
 
