@@ -129,8 +129,8 @@ make sqlx-prepare         # after changing any sqlx::query! macro
 make help                 # every target
 \`\`\`
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `fmt`, `lint`, `sqlx-check` and `test` against a real
-PostgreSQL on every pull request and push to `main`.
+GitHub Actions (\`.github/workflows/ci.yml\`) runs \`fmt\`, \`lint\`, \`sqlx-check\` and \`test\` against a real
+PostgreSQL on every pull request and push to \`main\`.
 
 ## Releases
 
