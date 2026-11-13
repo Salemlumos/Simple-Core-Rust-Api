@@ -170,9 +170,9 @@ Para obter a especificação sem subir a API nem o banco (por exemplo, para gera
 
 **Erros:** todo erro é `application/problem+json` (RFC 9457) com um campo `code` estável. Ele é o padrão do status
 (`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) ou um motivo específico de 403/409
-(`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; lista completa em
-`src/error.rs`). No 422, cada item de `errors` também traz `field` e `code` (`required`, `invalid_email`,
-`invalid_length`...). Clientes devem decidir e traduzir pelo `code`; `detail` e `message` são texto em inglês para
+(`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...). No 422, cada item de `errors` também traz `field` e `code`
+(`required`, `invalid_email`, `invalid_length`...). As listas completas estão no `enum` de `Problem.code` e `FieldError.code` na especificação
+(`make openapi`). Clientes devem decidir e traduzir pelo `code`; `detail` e `message` são texto em inglês para
 pessoas e podem mudar.
 
 ---

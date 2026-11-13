@@ -169,9 +169,9 @@ To get the specification without running the API or a database (e.g. to generate
 
 **Errors:** every error is `application/problem+json` (RFC 9457) with a stable `code` field. It is either the default
 for the status (`unauthorized`, `not_found`, `validation_failed`, `rate_limited`, `unavailable`...) or a specific 403/409
-reason (`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...; full list in
-`src/error.rs`). In a 422, each item of `errors` also has `field` and `code` (`required`, `invalid_email`,
-`invalid_length`...). Clients should branch and translate on `code`; `detail` and `message` are English text for
+reason (`missing_feature`, `cannot_grant`, `email_taken`, `slug_taken`, `last_tenant_admin`...). In a 422, each item of `errors` also has `field` and `code`
+(`required`, `invalid_email`, `invalid_length`...). The complete lists are the `enum` of `Problem.code` and `FieldError.code` in the specification
+(`make openapi`). Clients should branch and translate on `code`; `detail` and `message` are English text for
 humans and may change.
 
 ---
