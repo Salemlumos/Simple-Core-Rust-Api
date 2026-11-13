@@ -52,9 +52,13 @@ where
 
 /// `TRUSTED_PROXIES`: lista separada por vírgula de IPs ou CIDRs (IP sem prefixo vira /32 ou /128).
 fn parse_trusted_proxies() -> anyhow::Result<Vec<ipnet::IpNet>> {
-    let Some(raw) = env_opt("TRUSTED_PROXIES") else {
-        return Ok(Vec::new());
-    };
+    match env_opt("TRUSTED_PROXIES") {
+        Some(raw) => parse_proxy_list(&raw),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn parse_proxy_list(raw: &str) -> anyhow::Result<Vec<ipnet::IpNet>> {
     raw.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -293,5 +297,38 @@ impl ApiConfig {
     pub fn connection_budget(&self) -> u64 {
         u64::from(self.api_instances)
             * (self.max_open_tenant_pools * u64::from(self.tenant_pool_max) + u64::from(self.control_pool_max))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nets(raw: &str) -> Vec<String> {
+        parse_proxy_list(raw).unwrap().iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn bare_ips_get_full_prefix() {
+        assert_eq!(nets("10.0.0.1"), ["10.0.0.1/32"]);
+        assert_eq!(nets("2001:db8::1"), ["2001:db8::1/128"]);
+    }
+
+    #[test]
+    fn cidrs_are_kept() {
+        assert_eq!(nets("10.0.0.0/8, 2001:db8::/32"), ["10.0.0.0/8", "2001:db8::/32"]);
+    }
+
+    #[test]
+    fn whitespace_and_empty_entries_are_skipped() {
+        assert_eq!(nets(" 10.0.0.1 ,, 192.168.0.0/16 ,"), ["10.0.0.1/32", "192.168.0.0/16"]);
+        assert!(nets("  ,  ").is_empty());
+    }
+
+    #[test]
+    fn invalid_value_names_the_variable() {
+        let err = parse_proxy_list("10.0.0.1, lixo").unwrap_err().to_string();
+        assert!(err.contains("TRUSTED_PROXIES"), "{err}");
+        assert!(err.contains("lixo"), "{err}");
     }
 }
