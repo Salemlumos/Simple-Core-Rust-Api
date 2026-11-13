@@ -74,7 +74,7 @@ dev-worker: check-env ## api worker na máquina local
 # ------------------------------------------------------------------ qualidade
 
 openapi: ## Grava a especificação OpenAPI em OPENAPI_OUT (padrão openapi.json; sem banco nem env-file)
-	cargo run --release --locked -q -- openapi > $(OPENAPI_OUT)
+	cargo run --release --locked -q -- openapi > $(OPENAPI_OUT).tmp && mv $(OPENAPI_OUT).tmp $(OPENAPI_OUT)
 
 sqlx-prepare: check-env ## Regenera .sqlx (banco temporário sqlx_check com os dois schemas)
 	ENV_FILE=$(ENV_FILE) bash scripts/sqlx.sh prepare
