@@ -357,7 +357,7 @@ owner route and 403 for a tenant token on a platform route.
   session per browser: logging into another tenant replaces the cookie.
 - Logins: the same 401 for a nonexistent tenant, nonexistent e-mail, wrong password and inactive account, always
   running Argon2id (with a dummy hash when there is no user).
-- Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429.
+- Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429 with `Retry-After`.
 
 ### Performance and resilience
 

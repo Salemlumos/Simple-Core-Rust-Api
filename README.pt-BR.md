@@ -352,7 +352,7 @@ tenant em rota de plataforma.
   tenant por navegador: logar em outro tenant substitui o cookie.
 - Logins: mesmo 401 para tenant inexistente, e-mail inexistente, senha errada e conta inativa, sempre executando
   Argon2id (hash fictício quando não há usuário).
-- Rate limit de login por escopo (plataforma ou tenant), IP e e-mail, em janela fixa (`moka` com TTL) → 429.
+- Rate limit de login por escopo (plataforma ou tenant), IP e e-mail, em janela fixa (`moka` com TTL) → 429 com `Retry-After`.
 
 ### Desempenho e resiliência
 

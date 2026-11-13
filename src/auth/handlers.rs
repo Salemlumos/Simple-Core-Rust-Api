@@ -88,7 +88,8 @@ async fn login_tenant(st: &AppState, slug: &str) -> AppResult<Option<std::sync::
         (status = 400, description = "Header X-Tenant-Slug ausente", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Credenciais inválidas", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "Tenant suspenso", body = Problem, content_type = "application/problem+json"),
-        (status = 429, description = "Limite de tentativas de login", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Limite de tentativas de login", body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Segundos até poder tentar de novo"))),
     ))]
 pub async fn tenant_login(
     State(st): State<AppState>,
@@ -293,7 +294,8 @@ pub async fn tenant_me(Tenant(ctx): Tenant) -> AppResult<Json<MeResp>> {
     responses(
         (status = 200, description = "Tokens emitidos", body = TokenResp),
         (status = 401, description = "Credenciais inválidas", body = Problem, content_type = "application/problem+json"),
-        (status = 429, description = "Limite de tentativas de login", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Limite de tentativas de login", body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Segundos até poder tentar de novo"))),
     ))]
 pub async fn platform_login(
     State(st): State<AppState>,

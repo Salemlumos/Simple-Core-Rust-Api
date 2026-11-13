@@ -131,7 +131,7 @@ pub enum AppError {
     #[error("validation failed")]
     Validation(Vec<FieldError>),
     #[error("too many requests")]
-    TooManyRequests,
+    TooManyRequests { retry_after_secs: u64 },
     #[error("service unavailable: {0}")]
     Unavailable(&'static str),
     #[error(transparent)]
@@ -166,7 +166,7 @@ impl AppError {
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
+            Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -272,6 +272,12 @@ impl IntoResponse for AppError {
             Self::BadRequest(d) => problem(status, Some(d), None),
             Self::Forbidden(r) | Self::Conflict(r) => problem_with_code(status, r.code, Some(r.detail), None),
             Self::Unavailable(d) => problem(status, Some(d), None),
+            Self::TooManyRequests { retry_after_secs } => {
+                let mut resp = problem(status, None, None);
+                resp.headers_mut()
+                    .insert(header::RETRY_AFTER, HeaderValue::from(*retry_after_secs));
+                resp
+            }
             _ => problem(status, None, None),
         }
     }
