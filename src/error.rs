@@ -13,8 +13,18 @@ use serde::Serialize;
 /// Motivo de um 403 ou 409: código estável e explicação.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reason {
-    pub code: &'static str,
-    pub detail: &'static str,
+    code: &'static str,
+    detail: &'static str,
+}
+
+impl Reason {
+    pub const fn code(self) -> &'static str {
+        self.code
+    }
+
+    pub const fn detail(self) -> &'static str {
+        self.detail
+    }
 }
 
 /// Código de um erro de campo (422). Só se constrói aqui, pelas constantes de
@@ -118,11 +128,11 @@ pub enum AppError {
     BadRequest(String),
     #[error("unauthorized")]
     Unauthorized,
-    #[error("forbidden: {}", .0.code)]
+    #[error("forbidden: {}", .0.code())]
     Forbidden(Reason),
     #[error("not found")]
     NotFound,
-    #[error("conflict: {}", .0.code)]
+    #[error("conflict: {}", .0.code())]
     Conflict(Reason),
     #[error("payload too large")]
     PayloadTooLarge,
@@ -207,7 +217,7 @@ pub fn problem_codes() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = STATUS_CODES
         .iter()
         .copied()
-        .chain(reason::ALL.iter().map(|r| r.code))
+        .chain(reason::ALL.iter().map(|r| r.code()))
         .collect();
     v.sort_unstable();
     v.dedup();
@@ -237,7 +247,7 @@ pub fn problem(status: StatusCode, detail: Option<&str>, errors: Option<&[FieldE
     problem_with_code(status, status_code(status), detail, errors)
 }
 
-pub fn problem_with_code(
+fn problem_with_code(
     status: StatusCode,
     code: &str,
     detail: Option<&str>,
@@ -270,7 +280,7 @@ impl IntoResponse for AppError {
             }
             Self::Validation(errs) => problem(status, None, Some(errs)),
             Self::BadRequest(d) => problem(status, Some(d), None),
-            Self::Forbidden(r) | Self::Conflict(r) => problem_with_code(status, r.code, Some(r.detail), None),
+            Self::Forbidden(r) | Self::Conflict(r) => problem_with_code(status, r.code(), Some(r.detail()), None),
             Self::Unavailable(d) => problem(status, Some(d), None),
             Self::TooManyRequests { retry_after_secs } => {
                 let mut resp = problem(status, None, None);
