@@ -155,7 +155,7 @@ async fn insert_tenant_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exec:
         ("X-Tenant-Slug" = String, Header, description = "Slug do tenant"),
         ("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: lê e grava o refresh token no cookie `HttpOnly` `sc_tenant_rt`"),
     ),
-    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
+    request_body(content = Option<RefreshReq>, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses(
         (status = 200, description = "Tokens emitidos", body = TokenResp),
         (status = 401, description = "Refresh token inválido, expirado ou revogado", body = Problem, content_type = "application/problem+json"),
@@ -219,7 +219,7 @@ async fn tenant_rotate(st: &AppState, headers: &HeaderMap, token: Option<String>
 /// houver) e apaga o cookie.
 #[utoipa::path(post, path = "/v1/auth/logout", tag = "autenticação",
     params(("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: usa e apaga o cookie `sc_tenant_rt`")),
-    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
+    request_body(content = Option<RefreshReq>, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses((status = 204, description = "Refresh token revogado")))]
 pub async fn tenant_logout(
     State(st): State<AppState>,
@@ -353,7 +353,7 @@ async fn insert_platform_refresh<'e, E: sqlx::PgExecutor<'e>>(st: &AppState, exe
 /// é ignorado), o novo token volta no cookie e um 401 apaga o cookie.
 #[utoipa::path(post, path = "/v1/platform/auth/refresh", tag = "plataforma: autenticação",
     params(("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: lê e grava o refresh token no cookie `HttpOnly` `sc_platform_rt`")),
-    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
+    request_body(content = Option<RefreshReq>, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses(
         (status = 200, description = "Tokens emitidos", body = TokenResp),
         (status = 401, description = "Refresh token inválido, expirado ou revogado", body = Problem, content_type = "application/problem+json"),
@@ -413,7 +413,7 @@ async fn platform_rotate(st: &AppState, token: Option<String>) -> AppResult<(Str
 /// houver) e apaga o cookie.
 #[utoipa::path(post, path = "/v1/platform/auth/logout", tag = "plataforma: autenticação",
     params(("X-Auth-Mode" = Option<String>, Header, description = "`cookie`: usa e apaga o cookie `sc_platform_rt`")),
-    request_body(content = RefreshReq, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
+    request_body(content = Option<RefreshReq>, description = "Obrigatório sem `X-Auth-Mode: cookie`"),
     responses((status = 204, description = "Refresh token revogado")))]
 pub async fn platform_logout(
     State(st): State<AppState>,
