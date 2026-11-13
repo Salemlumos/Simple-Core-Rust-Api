@@ -200,6 +200,7 @@ There is no `DATABASE_URL`: connections are built per database (`control` or `te
 | `ACCESS_CACHE_CAPACITY`, `PLATFORM_CACHE_CAPACITY`, `TENANT_REGISTRY_CAPACITY` | cache capacities | 200000 / 10000 / 10000 |
 | `PASSWORD_HASH_CONCURRENCY` | Argon2id semaphore permits | number of cores |
 | `LOGIN_RATE_*`, `LOGIN_RATE_WINDOW_SECONDS` | login limits (platform must be stricter) | tenant 60/IP and 10/e-mail, platform 20 and 5, per 60 s |
+| `TRUSTED_PROXIES` | comma-separated IPs/CIDRs of proxies whose `X-Forwarded-For` is trusted for the client IP (e.g. the front-end Nginx) | empty (peer address only) |
 | `MIGRATE_CONCURRENCY` | tenants migrated in parallel | 4 |
 | `SEED_OWNER_EMAIL`, `SEED_OWNER_NAME`, `SEED_OWNER_PASSWORD` (≥ 16), `SEED_TENANT_SLUG`, `SEED_TENANT_NAME` | seed, no defaults | — |
 | `POSTGRES_MAX_CONNECTIONS`, `POSTGRES_SHARED_BUFFERS`, `DB_PUBLISH_PORT` | PostgreSQL container (the default of 1150 covers 110 pools × 10 connections) | 1150 / 1GB / 5433 |
@@ -357,7 +358,7 @@ owner route and 403 for a tenant token on a platform route.
   session per browser: logging into another tenant replaces the cookie.
 - Logins: the same 401 for a nonexistent tenant, nonexistent e-mail, wrong password and inactive account, always
   running Argon2id (with a dummy hash when there is no user).
-- Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429 with `Retry-After`.
+- Login rate limit per scope (platform or tenant), IP and e-mail, in a fixed window (`moka` with TTL) → 429 with `Retry-After`. The client IP is the TCP peer, or the `X-Forwarded-For` address when the peer is in `TRUSTED_PROXIES`.
 
 ### Performance and resilience
 

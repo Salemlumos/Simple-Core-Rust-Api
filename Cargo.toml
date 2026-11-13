@@ -27,6 +27,7 @@ axum = { version = "0.8.9", features = ["macros"] }
 base64 = "0.23.1"
 futures = "0.3.34"
 hmac = "0.13.0"
+ipnet = "2.11"
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
 log = "0.4.35"
 metrics = "0.24.6"

@@ -4,7 +4,7 @@
 //! `app_migrator`, e só o `bootstrap` lê as credenciais administrativas.
 
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -48,6 +48,22 @@ where
         None => Ok(default),
         Some(v) => v.parse().map_err(|e| anyhow::anyhow!("valor inválido em {name}: {e}")),
     }
+}
+
+/// `TRUSTED_PROXIES`: lista separada por vírgula de IPs ou CIDRs (IP sem prefixo vira /32 ou /128).
+fn parse_trusted_proxies() -> anyhow::Result<Vec<ipnet::IpNet>> {
+    let Some(raw) = env_opt("TRUSTED_PROXIES") else {
+        return Ok(Vec::new());
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<ipnet::IpNet>()
+                .or_else(|_| s.parse::<IpAddr>().map(ipnet::IpNet::from))
+                .map_err(|_| anyhow::anyhow!("valor inválido em TRUSTED_PROXIES: {s}"))
+        })
+        .collect()
 }
 
 pub fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
@@ -203,6 +219,8 @@ pub struct ApiConfig {
     pub login_window: Duration,
     pub login_limit_tenant: RateLimit,
     pub login_limit_platform: RateLimit,
+    /// Proxies cujo `X-Forwarded-For` é aceito (IPs ou CIDRs).
+    pub trusted_proxies: Vec<ipnet::IpNet>,
 }
 
 pub const PLATFORM_AUDIENCE: &str = "simple-core:platform";
@@ -244,6 +262,7 @@ impl ApiConfig {
                 per_ip: env_parse("LOGIN_RATE_PLATFORM_PER_IP", 20u32)?,
                 per_email: env_parse("LOGIN_RATE_PLATFORM_PER_EMAIL", 5u32)?,
             },
+            trusted_proxies: parse_trusted_proxies()?,
         };
         cfg.validate()?;
         Ok(cfg)

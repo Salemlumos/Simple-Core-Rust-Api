@@ -131,6 +131,7 @@ impl Env {
                 per_ip: 10_000,
                 per_email: 1_000,
             },
+            trusted_proxies: vec![],
         }
     }
 
